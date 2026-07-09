@@ -96,12 +96,14 @@ if st.session_state.settings_open:
     st.sidebar.subheader("Nastavenia")
 
     st.sidebar.write("### Premenovanie stĺpcov")
+
     all_cols = [
         "poradie","ticker","company_name","burza","mena","mnozstvo",
         "aktualna_cena","hodnota_pozicie","posledna_dividenda_na_akciu",
         "posledny_div_datum","frekvencia","rocna_div_na_akciu",
         "rocna_div_spolu","dividendovy_vynos_%","buduca_div_na_akciu",
-        "buduca_div_spolu","buduci_div_vynos_%","next_ex_div_date"
+        "buduca_div_spolu","buduci_div_vynos_%","next_ex_div_date",
+        "ex_div_date","div_amount","div_amount_total","div_yield_pct"
     ]
 
     for col in all_cols:
@@ -212,7 +214,7 @@ for idx, pos in enumerate(st.session_state.portfolio, start=1):
         "next_ex_div_date": eu_date(next_ex) if next_ex else ""
     })
 df = pd.DataFrame(rows)
-df = df.reset_index(drop=True)  # odstráni indexový stĺpec
+df = df.reset_index(drop=True)
 
 df_display = add_units(df).rename(columns=st.session_state.column_names)
 
@@ -222,7 +224,7 @@ edited_df = st.data_editor(
     hide_index=True,
     key="detail_editor",
     column_config={
-        "poradie": st.column_config.NumberColumn("Poradie", disabled=True),
+        "poradie": st.column_config.NumberColumn("Poradie", align="left", disabled=True),
         "ticker": st.column_config.TextColumn("Ticker", disabled=True),
         "company_name": st.column_config.TextColumn("Názov firmy", disabled=True),
         "burza": st.column_config.TextColumn("Burza", disabled=True),
@@ -231,7 +233,7 @@ edited_df = st.data_editor(
     }
 )
 
-# uloženie množstva z pôvodného DF (bez jednotiek)
+# uloženie množstva
 for i, row in edited_df.iterrows():
     st.session_state.portfolio[i]["shares"] = float(row["mnozstvo"])
 st.subheader("Ohlásené dividendy")
@@ -243,6 +245,8 @@ if official:
     div_df["div_amount"] = div_df["div_amount"].apply(lambda x: f"{x:.2f}")
     div_df["div_amount_total"] = div_df["div_amount_total"].apply(lambda x: f"{x:.2f}")
     div_df["div_yield_pct"] = div_df["div_yield_pct"].apply(lambda x: f"{x:.2f} %")
+
+    div_df = div_df.rename(columns=st.session_state.column_names)
 
     st.dataframe(div_df, use_container_width=True, hide_index=True)
 else:
