@@ -1,48 +1,162 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import requests
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Dividendový cockpit", layout="wide")
-
 st.title("Dividendový cockpit")
 
+# ---------- SESSION STATE ----------
 if "portfolio" not in st.session_state:
-    st.session_state.portfolio = []
+    st.session_state.portfolio = []  # list of dicts: {ticker, shares, name, exchange}
 
-def infer_frequency(dividends):
+if "column_labels" not in st.session_state:
+    st.session_state.column_labels = {
+        "ticker": "Ticker",
+        "burza": "Burza",
+        "mena": "Mena",
+        "mnozstvo": "Množstvo akcií",
+        "aktualna_cena": "Aktuálna cena",
+        "hodnota_pozicie": "Hodnota pozície",
+        "posledna_dividenda_na_akciu": "Posledná div. na akciu",
+        "posledny_div_datum": "Posledný div. dátum",
+        "frekvencia": "Frekvencia",
+        "rocna_div_na_akciu": "Ročná div. na akciu",
+        "rocna_div_spolu": "Ročná div. spolu",
+        "dividendovy_vynos_%": "Ročný div. výnos %",
+        "buduca_div_na_akciu": "Budúca div. na akciu",
+        "buduca_div_spolu": "Budúca div. spolu",
+        "buduci_div_vynos_%": "Budúci div. výnos %",
+        "next_ex_div_date": "Budúci Ex-div dátum",
+    }
+
+# ---------- HELPER FUNKCIE ----------
+
+def infer_frequency(dividends: pd.Series):
     if len(dividends) < 2:
         return "neznáme"
     dates = dividends.index.to_pydatetime()
-    deltas = [(dates[i] - dates[i-1]).days for i in range(1, len(dates))]
+    deltas = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
     avg = sum(deltas) / len(deltas)
-    if avg < 45: return "mesačne"
-    if avg < 140: return "kvartálne"
-    if avg < 300: return "polročne"
+    if avg < 45:
+        return "mesačne"
+    if avg < 140:
+        return "kvartálne"
+    if avg < 300:
+        return "polročne"
     return "ročne"
 
-def freq_per_year(freq):
-    return {"mesačne":12, "kvartálne":4, "polročne":2, "ročne":1}.get(freq, 0)
+def freq_per_year(freq_text: str) -> int:
+    return {"mesačne": 12, "kvartálne": 4, "polročne": 2, "ročne": 1}.get(freq_text, 0)
 
-st.sidebar.header("Pridaj akciu")
-with st.sidebar.form("add"):
-    t = st.text_input("Ticker").strip().upper()
-    s = st.number_input("Množstvo", min_value=0.0, step=1.0)
-    if st.form_submit_button("Pridať"):
-        if t and s > 0:
-            st.session_state.portfolio.append({"ticker": t, "shares": s})
-            st.success(f"Pridané {t}")
-        else:
-            st.error("Zadaj ticker a množstvo > 0")
+def search_tickers(query: str, limit: int = 10):
+    """
+    Použije Yahoo Finance search API na návrhy tickerov.
+    """
+    if not query or len(query) < 2:
+        return []
+    url = "https://query1.finance.yahoo.com/v1/finance/search"
+    params = {"q": query, "quotesCount": limit, "newsCount": 0}
+    try:
+        r = requests.get(url, params=params, timeout=5)
+        data = r.json()
+        results = []
+        for q in data.get("quotes", []):
+            symbol = q.get("symbol")
+            shortname = q.get("shortname", "")
+            exch = q.get("exchange", "")
+            if symbol:
+                label = f"{symbol} - {shortname} ({exch})"
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "shortname": shortname,
+                        "exchange": exch,
+                        "label": label,
+                    }
+                )
+        return results
+    except Exception:
+        return []
+
+# ---------- SIDEBAR: PRIDANIE AKCIE S NÁVRHMI TICKEROV ----------
+
+st.sidebar.header("Pridaj akciu do portfólia")
+
+ticker_query = st.sidebar.text_input("Začni písať ticker alebo názov firmy")
+suggestions = search_tickers(ticker_query)
+
+selected_ticker = None
+if suggestions:
+    labels = [s["label"] for s in suggestions]
+    idx = st.sidebar.selectbox("Vyber správny ticker", range(len(labels)), format_func=lambda i: labels[i])
+    selected_ticker = suggestions[idx]
+else:
+    st.sidebar.caption("Zadaj aspoň 2 znaky, aby sa zobrazili návrhy.")
+
+shares_input = st.sidebar.number_input("Množstvo akcií", min_value=0.0, step=1.0)
+
+if st.sidebar.button("Pridať do portfólia"):
+    if selected_ticker and shares_input > 0:
+        st.session_state.portfolio.append(
+            {
+                "ticker": selected_ticker["symbol"],
+                "shares": shares_input,
+                "name": selected_ticker["shortname"],
+                "exchange": selected_ticker["exchange"],
+            }
+        )
+        st.sidebar.success(f"Pridané: {selected_ticker['symbol']} ({shares_input} ks)")
+    else:
+        st.sidebar.error("Vyber ticker a zadaj množstvo väčšie ako 0.")
+
+# ---------- NASTAVENIA STĹPCOV ----------
+
+with st.sidebar.expander("Premenovanie stĺpcov"):
+    for key, default_label in st.session_state.column_labels.items():
+        new_label = st.text_input(f"Názov stĺpca pre '{key}'", value=default_label)
+        st.session_state.column_labels[key] = new_label
+
+# ---------- HLAVNÁ ČASŤ: PORTFÓLIO ----------
+
+st.subheader("Moje portfólio")
 
 if not st.session_state.portfolio:
-    st.info("Pridaj akcie v ľavom paneli.")
+    st.info("Zatiaľ nemáš žiadne akcie v portfóliu. Pridaj ich v ľavom paneli.")
     st.stop()
 
-rows = []
-hist_rows = []
-ex_rows = []
-year = datetime.now().year
+portfolio_df = pd.DataFrame(st.session_state.portfolio)
+st.dataframe(portfolio_df, use_container_width=True)
+
+# ---------- MOŽNOSŤ UPRAVIŤ POČET AKCIÍ ----------
+
+st.subheader("Upraviť množstvo akcií")
+
+for i, pos in enumerate(st.session_state.portfolio):
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        st.write(f"**{pos['ticker']}** ({pos.get('name', '')})")
+    with col2:
+        new_shares = st.number_input(
+            f"Nové množstvo pre {pos['ticker']}",
+            min_value=0.0,
+            step=1.0,
+            value=float(pos["shares"]),
+            key=f"shares_edit_{i}",
+        )
+    with col3:
+        if st.button("Uložiť", key=f"save_{i}"):
+            st.session_state.portfolio[i]["shares"] = new_shares
+            st.success(f"Množstvo pre {pos['ticker']} upravené na {new_shares}")
+
+# ---------- SPRACOVANIE DÁT ----------
+
+all_rows = []
+dividend_history_rows = []
+upcoming_ex_div_rows = []
+
+current_year = datetime.now().year
 
 for pos in st.session_state.portfolio:
     ticker = pos["ticker"]
@@ -50,102 +164,169 @@ for pos in st.session_state.portfolio:
 
     try:
         t = yf.Ticker(ticker)
-        price = t.history(period="1d")["Close"].iloc[-1]
-        info = t.info
-        exchange = info.get("exchange", "neznáme")
+
+        # Aktuálna cena
+        hist = t.history(period="1d")
+        if hist.empty:
+            price = None
+        else:
+            price = float(hist["Close"].iloc[-1])
+
+        info = getattr(t, "info", {})
+        exchange = info.get("exchange", pos.get("exchange", "neznáme"))
         currency = info.get("currency", "neznáme")
 
+        # Dividendy (história)
         dividends = t.dividends
-        if dividends.empty:
-            rows.append({
+
+        last_amount = None
+        last_date = None
+        freq_text = "neznáme"
+        annual_div_per_share = 0.0
+        dividend_yield_pct = 0.0
+        annual_div_total = 0.0
+        future_div_yield_pct = 0.0
+        future_div_total = 0.0
+        next_ex_div_date = None
+
+        if dividends is not None and not dividends.empty:
+            last_amount = float(dividends.iloc[-1])
+            last_date = dividends.index[-1].to_pydatetime()
+
+            freq_text = infer_frequency(dividends)
+            freq_per_year_val = freq_per_year(freq_text)
+
+            if freq_per_year_val > 0:
+                annual_div_per_share = last_amount * freq_per_year_val
+            else:
+                annual_div_per_share = 0.0
+
+            if price and annual_div_per_share > 0:
+                dividend_yield_pct = annual_div_per_share / price * 100
+            else:
+                dividend_yield_pct = 0.0
+
+            annual_div_total = annual_div_per_share * shares
+
+            # Budúca (najbližšia) dividenda – berieme poslednú ako reprezentatívnu
+            future_div_total = last_amount * shares
+            if price and last_amount > 0:
+                future_div_yield_pct = last_amount / price * 100
+            else:
+                future_div_yield_pct = 0.0
+
+            # História dividend v aktuálnom roku (mesačné súčty)
+            div_df = dividends.to_frame(name="div_per_share")
+            div_df["date"] = div_df.index
+            div_df["year"] = div_df["date"].dt.year
+            div_df["month"] = div_df["date"].dt.month
+            div_df["div_total"] = div_df["div_per_share"] * shares
+
+            current_year_div = div_df[div_df["year"] == current_year]
+            monthly_sum = (
+                current_year_div.groupby("month")["div_total"].sum().reset_index()
+            )
+            monthly_sum["ticker"] = ticker
+
+            for _, row in monthly_sum.iterrows():
+                dividend_history_rows.append(
+                    {
+                        "ticker": ticker,
+                        "month": int(row["month"]),
+                        "div_total": float(row["div_total"]),
+                    }
+                )
+
+            # Odhad najbližšieho ex-div dátumu na základe frekvencie
+            if freq_text == "mesačne":
+                next_ex_div_date = last_date + timedelta(days=30)
+            elif freq_text == "kvartálne":
+                next_ex_div_date = last_date + timedelta(days=90)
+            elif freq_text == "polročne":
+                next_ex_div_date = last_date + timedelta(days=180)
+            elif freq_text == "ročne":
+                next_ex_div_date = last_date + timedelta(days=365)
+            else:
+                next_ex_div_date = None
+
+            if next_ex_div_date:
+                upcoming_ex_div_rows.append(
+                    {
+                        "ticker": ticker,
+                        "next_ex_div_date": next_ex_div_date.date(),
+                        "div_yield_pct": dividend_yield_pct,
+                        "next_div_amount_total": future_div_total,
+                    }
+                )
+
+        all_rows.append(
+            {
                 "ticker": ticker,
                 "burza": exchange,
                 "mena": currency,
                 "mnozstvo": shares,
                 "aktualna_cena": price,
-                "hodnota_pozicie": price * shares,
-                "posledna_dividenda_na_akciu": None,
-                "frekvencia": "neznáme",
-                "rocna_div_na_akciu": 0,
-                "rocna_div_spolu": 0,
-                "dividendovy_vynos_%": 0
-            })
-            continue
-
-        last_amount = dividends.iloc[-1]
-        last_date = dividends.index[-1].to_pydatetime()
-
-        freq = infer_frequency(dividends)
-        fpy = freq_per_year(freq)
-        annual = last_amount * fpy
-        yield_pct = annual / price * 100 if annual > 0 else 0
-        annual_total = annual * shares
-
-        df = dividends.to_frame("div_per_share")
-        df["date"] = df.index
-        df["year"] = df["date"].dt.year
-        df["month"] = df["date"].dt.month
-        df["div_total"] = df["div_per_share"] * shares
-
-        cy = df[df["year"] == year]
-        monthly = cy.groupby("month")["div_total"].sum().reset_index()
-
-        for _, r in monthly.iterrows():
-            hist_rows.append({
-                "ticker": ticker,
-                "month": int(r["month"]),
-                "div_total": float(r["div_total"])
-            })
-
-        if freq == "mesačne":
-            next_ex = last_date + timedelta(days=30)
-        elif freq == "kvartálne":
-            next_ex = last_date + timedelta(days=90)
-        elif freq == "polročne":
-            next_ex = last_date + timedelta(days=180)
-        elif freq == "ročne":
-            next_ex = last_date + timedelta(days=365)
-        else:
-            next_ex = None
-
-        if next_ex:
-            ex_rows.append({
-                "ticker": ticker,
-                "next_ex_div_date": next_ex.date(),
-                "div_yield_pct": yield_pct,
-                "next_div_amount_total": last_amount * shares
-            })
-
-        rows.append({
-            "ticker": ticker,
-            "burza": exchange,
-            "mena": currency,
-            "mnozstvo": shares,
-            "aktualna_cena": price,
-            "hodnota_pozicie": price * shares,
-            "posledna_dividenda_na_akciu": last_amount,
-            "posledny_div_datum": last_date.date(),
-            "frekvencia": freq,
-            "rocna_div_na_akciu": annual,
-            "rocna_div_spolu": annual_total,
-            "dividendovy_vynos_%": yield_pct
-        })
+                "hodnota_pozicie": price * shares if price else None,
+                "posledna_dividenda_na_akciu": last_amount,
+                "posledny_div_datum": last_date.date() if last_date else None,
+                "frekvencia": freq_text,
+                "rocna_div_na_akciu": annual_div_per_share,
+                "rocna_div_spolu": annual_div_total,
+                "dividendovy_vynos_%": dividend_yield_pct,
+                "buduca_div_na_akciu": last_amount,
+                "buduca_div_spolu": future_div_total,
+                "buduci_div_vynos_%": future_div_yield_pct,
+                "next_ex_div_date": next_ex_div_date.date() if next_ex_div_date else None,
+            }
+        )
 
     except Exception as e:
-        st.error(f"Chyba pri {ticker}: {e}")
+        st.error(f"Chyba pri spracovaní tickeru {ticker}: {e}")
 
-st.subheader("Detail akcií")
-st.dataframe(pd.DataFrame(rows), use_container_width=True)
+# ---------- DETAILNÁ TABUĽKA ----------
 
-if hist_rows:
-    st.subheader(f"Dividendy {year}")
-    h = pd.DataFrame(hist_rows)
-    m = h.groupby("month")["div_total"].sum().reset_index()
-    m["month_name"] = m["month"].apply(lambda x: datetime(year, x, 1).strftime("%b"))
-    st.bar_chart(m.set_index("month_name")["div_total"])
+if all_rows:
+    st.subheader("Detailné informácie o akciách")
+    details_df = pd.DataFrame(all_rows)
+
+    # Premenovanie stĺpcov podľa nastavení
+    rename_map = {
+        col: st.session_state.column_labels.get(col, col)
+        for col in details_df.columns
+    }
+    details_df = details_df.rename(columns=rename_map)
+
+    st.dataframe(details_df, use_container_width=True)
+
+# ---------- GRAF MESAČNÝCH DIVIDEND ----------
+
+if dividend_history_rows:
+    st.subheader(f"História vyplatených dividend v roku {current_year}")
+
+    hist_df = pd.DataFrame(dividend_history_rows)
+    total_monthly = hist_df.groupby("month")["div_total"].sum().reset_index()
+    total_monthly["month_name"] = total_monthly["month"].apply(
+        lambda m: datetime(current_year, m, 1).strftime("%b")
+    )
+
+    st.bar_chart(
+        data=total_monthly.set_index("month_name")["div_total"],
+        use_container_width=True,
+    )
+
+    with st.expander("Detail podľa tickerov"):
+        st.dataframe(hist_df, use_container_width=True)
 else:
-    st.info("Žiadna história dividend.")
+    st.info("Nemám históriu dividend pre aktuálny rok (možno ticker nevypláca dividendy alebo chýbajú dáta).")
 
-if ex_rows:
-    st.subheader("Najbližšie odhadované Ex-div dátumy")
-    st.dataframe(pd.DataFrame(ex_rows), use_container_width=True)
+# ---------- ZOZNAM BUDÚCICH (ODHADOVANÝCH) EX-DIV DÁTUMOV ----------
+
+if upcoming_ex_div_rows:
+    st.subheader("Odhad najbližších Ex-div dátumov (na základe histórie)")
+
+    upcoming_df = pd.DataFrame(upcoming_ex_div_rows)
+    upcoming_df = upcoming_df.sort_values("next_ex_div_date")
+
+    st.dataframe(upcoming_df, use_container_width=True)
+else:
+    st.info("Z histórie sa nepodarilo odhadnúť najbližšie Ex-div dátumy.")
