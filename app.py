@@ -5,58 +5,38 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Dividendový cockpit", layout="wide")
 st.title("Dividendový cockpit")
-
 if "portfolio" not in st.session_state:
     st.session_state.portfolio = []
 
-if "column_names" not in st.session_state:
-    st.session_state.column_names = {}
-
 if "settings_open" not in st.session_state:
     st.session_state.settings_open = False
-def infer_frequency(divs):
-    if len(divs) < 2:
-        return "neznáme"
-    dates = divs.index.to_pydatetime()
-    diffs = [(dates[i] - dates[i-1]).days for i in range(1, len(dates))]
-    avg = sum(diffs) / len(diffs)
-    if avg < 45: return "mesačne"
-    if avg < 140: return "kvartálne"
-    if avg < 300: return "polročne"
-    return "ročne"
+with st.sidebar:
+    col1, col2 = st.columns([4,1])
 
-def freq_per_year(freq):
-    return {"mesačne":12,"kvartálne":4,"polročne":2,"ročne":1}.get(freq,0)
+    with col1:
+        ticker = st.text_input("Ticker", key="ticker").strip().upper()
+        shares = st.text_input("Množstvo akcií", key="shares").strip()
 
-def eu_date(d):
-    if d is None: return ""
-    return d.strftime("%d-%m-%y")
-col_add, col_settings = st.sidebar.columns([4,1])
+        if st.button("Pridať"):
+            try:
+                val = float(shares)
+                if ticker and val > 0:
+                    st.session_state.portfolio.append({"ticker": ticker, "shares": val})
+                    st.success(f"Pridané {ticker}")
 
-with col_add:
-    ticker = st.text_input("Ticker (napr. MA, MA.TO)", key="ticker_input").strip().upper()
-    shares = st.text_input("Množstvo akcií", key="shares_input").strip()
+                    # FUNKČNÝ RESET
+                    st.session_state.ticker = ""
+                    st.session_state.shares = ""
+                else:
+                    st.error("Zadaj ticker a množstvo > 0")
+            except:
+                st.error("Zadaj platné číslo")
 
-    if st.button("Pridať"):
-        try:
-            shares_val = float(shares)
-            if ticker and shares_val > 0:
-                st.session_state.portfolio.append({"ticker": ticker, "shares": shares_val})
-                st.success(f"Pridané {ticker}")
-                st.session_state.ticker_input = ""
-                st.session_state.shares_input = ""
-            else:
-                st.error("Zadaj ticker a množstvo > 0")
-        except:
-            st.error("Zadaj platné číslo")
-
-with col_settings:
-    if st.button("⚙️"):
-        st.session_state.settings_open = not st.session_state.settings_open
+    with col2:
+        if st.button("⚙️"):
+            st.session_state.settings_open = not st.session_state.settings_open
 if st.session_state.settings_open:
     st.sidebar.subheader("Nastavenia")
-
-    st.sidebar.write("### Premenovanie stĺpcov")
 
     all_cols = [
         "poradie","ticker","company_name","burza","mena","mnozstvo",
@@ -67,30 +47,9 @@ if st.session_state.settings_open:
         "ex_div_date","div_amount","div_amount_total","div_yield_pct"
     ]
 
+    st.sidebar.write("Premenovanie stĺpcov:")
     for col in all_cols:
-        new_name = st.sidebar.text_input(
-            f"Názov pre '{col}'",
-            value=st.session_state.column_names.get(col, col)
-        )
-        st.session_state.column_names[col] = new_name
-
-    st.sidebar.write("### Označenia búrz")
-    st.sidebar.table(pd.DataFrame({
-        "Yahoo kód":["NYQ","NMS","ASE","PCX","BATS","TSX","LSE","FRA","GER","MIL","SWX"],
-        "Burza":["NYSE","NASDAQ","AMEX","NYSE Arca","BATS","Toronto","London","Frankfurt","Xetra","Milano","Swiss"]
-    }))
-
-    st.sidebar.write("### Označenia mien")
-    st.sidebar.table(pd.DataFrame({
-        "Kód":["USD","EUR","GBP","CHF","JPY","CAD","AUD"],
-        "Mena":["Americký dolár","Euro","Britská libra","Švajčiarsky frank","Japonský jen","Kanadský dolár","Austrálsky dolár"]
-    }))
-st.subheader("Detailné informácie o akciách")
-
-if not st.session_state.portfolio:
-    st.info("Zatiaľ nič nepridané.")
-    st.stop()
-
+        st.sidebar.text_input(f"{col}", key=f"rename_{col}")
 rows = []
 official = []
 
@@ -120,95 +79,70 @@ for idx, pos in enumerate(st.session_state.portfolio, start=1):
         last_amt = float(divs.iloc[-1])
         last_date = divs.index[-1].to_pydatetime()
 
-        freq = infer_frequency(divs)
-        fpy = freq_per_year(freq)
+        # frekvencia
+        dates = divs.index.to_pydatetime()
+        diffs = [(dates[i] - dates[i-1]).days for i in range(1, len(dates))]
+        avg = sum(diffs) / len(diffs)
+        if avg < 45: freq = "mesačne"
+        elif avg < 140: freq = "kvartálne"
+        elif avg < 300: freq = "polročne"
+        else: freq = "ročne"
 
-        if fpy > 0:
-            annual = last_amt * fpy
-
-        if price and annual > 0:
-            yield_pct = annual / price * 100
-
-        annual_total = annual * pos["shares"]
-
-        future_total = last_amt * pos["shares"]
-        if price and last_amt > 0:
-            future_yield = last_amt / price * 100
-
+        # ďalší ex-div
         if freq == "mesačne": next_ex = last_date + timedelta(days=30)
         elif freq == "kvartálne": next_ex = last_date + timedelta(days=91)
         elif freq == "polročne": next_ex = last_date + timedelta(days=180)
         elif freq == "ročne": next_ex = last_date + timedelta(days=365)
 
-        if next_ex:
-            official.append({
-                "poradie": idx,
-                "ticker": pos["ticker"],
-                "company_name": company,
-                "ex_div_date": eu_date(next_ex),
-                "div_amount": last_amt,
-                "div_amount_total": future_total,
-                "div_yield_pct": future_yield
-            })
+        official.append({
+            "poradie": str(idx),
+            "ticker": pos["ticker"],
+            "company_name": company,
+            "ex_div_date": next_ex.strftime("%d-%m-%y") if next_ex else "",
+            "div_amount": f"{last_amt:.2f}",
+            "div_amount_total": f"{last_amt * pos['shares']:.2f}",
+            "div_yield_pct": f"{(last_amt/price*100):.2f} %" if price else ""
+        })
 
     rows.append({
-        "poradie": idx,
+        "poradie": str(idx),
         "ticker": pos["ticker"],
         "company_name": company,
         "burza": exchange,
         "mena": currency,
         "mnozstvo": pos["shares"],
-        "aktualna_cena": price,
-        "hodnota_pozicie": price*pos["shares"] if price else None,
-        "posledna_dividenda_na_akciu": last_amt,
-        "posledny_div_datum": eu_date(last_date) if last_date else "",
+        "aktualna_cena": f"{price:.2f} {currency}" if price else "",
+        "hodnota_pozicie": f"{price*pos['shares']:.2f} {currency}" if price else "",
+        "posledna_dividenda_na_akciu": f"{last_amt:.2f}" if last_amt else "",
+        "posledny_div_datum": last_date.strftime("%d-%m-%y") if last_date else "",
         "frekvencia": freq,
-        "rocna_div_na_akciu": annual,
-        "rocna_div_spolu": annual_total,
-        "dividendovy_vynos_%": yield_pct,
-        "buduca_div_na_akciu": last_amt,
-        "buduca_div_spolu": future_total,
-        "buduci_div_vynos_%": future_yield,
-        "next_ex_div_date": eu_date(next_ex) if next_ex else ""
+        "rocna_div_na_akciu": f"{annual:.2f}",
+        "rocna_div_spolu": f"{annual_total:.2f}",
+        "dividendovy_vynos_%": f"{yield_pct:.2f} %",
+        "buduca_div_na_akciu": f"{last_amt:.2f}" if last_amt else "",
+        "buduca_div_spolu": f"{future_total:.2f}",
+        "buduci_div_vynos_%": f"{future_yield:.2f} %",
+        "next_ex_div_date": next_ex.strftime("%d-%m-%y") if next_ex else ""
     })
 df = pd.DataFrame(rows)
-df = df.reset_index(drop=True)
 
-df["poradie"] = df["poradie"].astype(str)
-
-df_display = df.rename(columns=st.session_state.column_names)
-
-edited_df = st.data_editor(
-    df_display,
-    use_container_width=True,
+edited = st.data_editor(
+    df,
     hide_index=True,
-    key="detail_editor",
+    key="editor",
     column_config={
         "poradie": st.column_config.TextColumn("Poradie", disabled=True),
-        "ticker": st.column_config.TextColumn("Ticker", disabled=True),
-        "company_name": st.column_config.TextColumn("Názov firmy", disabled=True),
-        "burza": st.column_config.TextColumn("Burza", disabled=True),
-        "mena": st.column_config.TextColumn("Mena", disabled=True),
-        "mnozstvo": st.column_config.NumberColumn("Množstvo akcií"),
+        "mnozstvo": st.column_config.NumberColumn("Množstvo akcií")
     }
 )
 
-for i, row in edited_df.iterrows():
+# uloženie zmien
+for i, row in edited.iterrows():
     st.session_state.portfolio[i]["shares"] = float(row["mnozstvo"])
 st.subheader("Ohlásené dividendy")
 
 if official:
     div_df = pd.DataFrame(official)
-    div_df = div_df.reset_index(drop=True)
-
-    div_df["poradie"] = div_df["poradie"].astype(str)
-
-    div_df["div_amount"] = div_df["div_amount"].apply(lambda x: f"{x:.2f}")
-    div_df["div_amount_total"] = div_df["div_amount_total"].apply(lambda x: f"{x:.2f}")
-    div_df["div_yield_pct"] = div_df["div_yield_pct"].apply(lambda x: f"{x:.2f} %")
-
-    div_df = div_df.rename(columns=st.session_state.column_names)
-
-    st.dataframe(div_df, use_container_width=True, hide_index=True)
+    st.dataframe(div_df, hide_index=True)
 else:
     st.info("Žiadne ohlásené dividendy.")
