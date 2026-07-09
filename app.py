@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import requests
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Dividendový cockpit", layout="wide")
@@ -9,7 +8,7 @@ st.title("Dividendový cockpit")
 
 # ---------- SESSION STATE ----------
 if "portfolio" not in st.session_state:
-    st.session_state.portfolio = []  # list of dicts: {ticker, shares, name, exchange}
+    st.session_state.portfolio = []  # list of dicts: {ticker, shares}
 
 if "column_labels" not in st.session_state:
     st.session_state.column_labels = {
@@ -50,66 +49,21 @@ def infer_frequency(dividends: pd.Series):
 def freq_per_year(freq_text: str) -> int:
     return {"mesačne": 12, "kvartálne": 4, "polročne": 2, "ročne": 1}.get(freq_text, 0)
 
-def search_tickers(query: str, limit: int = 10):
-    """
-    Použije Yahoo Finance search API na návrhy tickerov.
-    """
-    if not query or len(query) < 2:
-        return []
-    url = "https://query1.finance.yahoo.com/v1/finance/search"
-    params = {"q": query, "quotesCount": limit, "newsCount": 0}
-    try:
-        r = requests.get(url, params=params, timeout=5)
-        data = r.json()
-        results = []
-        for q in data.get("quotes", []):
-            symbol = q.get("symbol")
-            shortname = q.get("shortname", "")
-            exch = q.get("exchange", "")
-            if symbol:
-                label = f"{symbol} - {shortname} ({exch})"
-                results.append(
-                    {
-                        "symbol": symbol,
-                        "shortname": shortname,
-                        "exchange": exch,
-                        "label": label,
-                    }
-                )
-        return results
-    except Exception:
-        return []
-
-# ---------- SIDEBAR: PRIDANIE AKCIE S NÁVRHMI TICKEROV ----------
+# ---------- SIDEBAR: PRIDANIE AKCIE ----------
 
 st.sidebar.header("Pridaj akciu do portfólia")
 
-ticker_query = st.sidebar.text_input("Začni písať ticker alebo názov firmy")
-suggestions = search_tickers(ticker_query)
-
-selected_ticker = None
-if suggestions:
-    labels = [s["label"] for s in suggestions]
-    idx = st.sidebar.selectbox("Vyber správny ticker", range(len(labels)), format_func=lambda i: labels[i])
-    selected_ticker = suggestions[idx]
-else:
-    st.sidebar.caption("Zadaj aspoň 2 znaky, aby sa zobrazili návrhy.")
-
+ticker_input = st.sidebar.text_input("Ticker (napr. MA, MA.TO, MA.DE)").strip().upper()
 shares_input = st.sidebar.number_input("Množstvo akcií", min_value=0.0, step=1.0)
 
 if st.sidebar.button("Pridať do portfólia"):
-    if selected_ticker and shares_input > 0:
+    if ticker_input and shares_input > 0:
         st.session_state.portfolio.append(
-            {
-                "ticker": selected_ticker["symbol"],
-                "shares": shares_input,
-                "name": selected_ticker["shortname"],
-                "exchange": selected_ticker["exchange"],
-            }
+            {"ticker": ticker_input, "shares": shares_input}
         )
-        st.sidebar.success(f"Pridané: {selected_ticker['symbol']} ({shares_input} ks)")
+        st.sidebar.success(f"Pridané: {ticker_input} ({shares_input} ks)")
     else:
-        st.sidebar.error("Vyber ticker a zadaj množstvo väčšie ako 0.")
+        st.sidebar.error("Zadaj ticker a množstvo väčšie ako 0.")
 
 # ---------- NASTAVENIA STĹPCOV ----------
 
@@ -136,7 +90,7 @@ st.subheader("Upraviť množstvo akcií")
 for i, pos in enumerate(st.session_state.portfolio):
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        st.write(f"**{pos['ticker']}** ({pos.get('name', '')})")
+        st.write(f"**{pos['ticker']}**")
     with col2:
         new_shares = st.number_input(
             f"Nové množstvo pre {pos['ticker']}",
@@ -173,7 +127,7 @@ for pos in st.session_state.portfolio:
             price = float(hist["Close"].iloc[-1])
 
         info = getattr(t, "info", {})
-        exchange = info.get("exchange", pos.get("exchange", "neznáme"))
+        exchange = info.get("exchange", "neznáme")
         currency = info.get("currency", "neznáme")
 
         # Dividendy (história)
