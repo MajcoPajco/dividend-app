@@ -144,4 +144,81 @@ for pos in st.session_state.portfolio:
 
         # Aktuálna cena
         hist = t.history(period="1d")
-        price = float(hist["Close"].iloc[-1]) if not hist.empty
+        if not hist.empty:
+            price = float(hist["Close"].iloc[-1])
+        else:
+            price = None
+
+        info = getattr(t, "info", {})
+        exchange = info.get("exchange", "neznáme")
+        currency = info.get("currency", "USD")
+        company_name = info.get("shortName", "")
+
+        # Dividendy (história)
+        dividends = t.dividends
+
+        last_amount = None
+        last_date = None
+        freq_text = "neznáme"
+        annual_div_per_share = 0.0
+        dividend_yield_pct = 0.0
+        annual_div_total = 0.0
+        future_div_yield_pct = 0.0
+        future_div_total = 0.0
+        next_ex_div_date = None
+
+        if dividends is not None and not dividends.empty:
+            last_amount = float(dividends.iloc[-1])
+            last_date = dividends.index[-1].to_pydatetime()
+
+            freq_text = infer_frequency(dividends)
+            freq_per_year_val = freq_per_year(freq_text)
+
+            if freq_per_year_val > 0:
+                annual_div_per_share = last_amount * freq_per_year_val
+
+            if price and annual_div_per_share > 0:
+                dividend_yield_pct = annual_div_per_share / price * 100
+
+            annual_div_total = annual_div_per_share * shares
+
+            # Budúca (najbližšia) dividenda – posledná ohlásená
+            future_div_total = last_amount * shares
+            if price and last_amount > 0:
+                future_div_yield_pct = last_amount / price * 100
+
+            # Ohlásené dividendy (oficiálne)
+            official_div_rows.append({
+                "ticker": ticker,
+                "company_name": company_name,
+                "ex_div_date": last_date.date(),
+                "div_amount": last_amount,
+                "div_amount_total": future_div_total,
+                "div_yield_pct": future_div_yield_pct,
+                "currency": currency
+            })
+
+            # Odhad najbližšieho ex-div dátumu
+            if freq_text == "mesačne":
+                next_ex_div_date = last_date + timedelta(days=30)
+            elif freq_text == "kvartálne":
+                next_ex_div_date = last_date + timedelta(days=90)
+            elif freq_text == "polročne":
+                next_ex_div_date = last_date + timedelta(days=180)
+            elif freq_text == "ročne":
+                next_ex_div_date = last_date + timedelta(days=365)
+
+        all_rows.append(
+            {
+                "ticker": ticker,
+                "company_name": company_name,
+                "burza": exchange,
+                "mena": currency,
+                "mnozstvo": shares,
+                "aktualna_cena": price,
+                "hodnota_pozicie": price * shares if price else None,
+                "posledna_dividenda_na_akciu": last_amount,
+                "posledny_div_datum": last_date.date() if last_date else None,
+                "frekvencia": freq_text,
+                "rocna_div_na_akciu": annual_div_per_share,
+                "rocna_div_spolu": annual_div_total,
