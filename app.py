@@ -31,27 +31,6 @@ def freq_per_year(freq):
 def eu_date(d):
     if d is None: return ""
     return d.strftime("%d-%m-%y")
-
-def add_units(df):
-    df = df.copy()
-
-    pct_cols = ["dividendovy_vynos_%","buduci_div_vynos_%"]
-    for c in pct_cols:
-        if c in df.columns:
-            df[c] = df[c].apply(lambda x: f"{x:.2f} %" if pd.notna(x) else "")
-
-    if "mena" in df.columns:
-        cur = df["mena"].iloc[0] or ""
-        money_cols = [
-            "aktualna_cena","hodnota_pozicie","posledna_dividenda_na_akciu",
-            "rocna_div_na_akciu","rocna_div_spolu","buduca_div_na_akciu",
-            "buduca_div_spolu"
-        ]
-        for c in money_cols:
-            if c in df.columns:
-                df[c] = df[c].apply(lambda x: f"{x:.2f} {cur}" if pd.notna(x) else "")
-
-    return df
 col_add, col_settings = st.sidebar.columns([4,1])
 
 with col_add:
@@ -64,8 +43,6 @@ with col_add:
             if ticker and shares_val > 0:
                 st.session_state.portfolio.append({"ticker": ticker, "shares": shares_val})
                 st.success(f"Pridané {ticker}")
-
-                # reset inputov
                 st.session_state.ticker_input = ""
                 st.session_state.shares_input = ""
             else:
@@ -116,8 +93,6 @@ if not st.session_state.portfolio:
 
 rows = []
 official = []
-
-today = datetime.today().date()
 
 for idx, pos in enumerate(st.session_state.portfolio, start=1):
     t = yf.Ticker(pos["ticker"])
@@ -199,10 +174,9 @@ for idx, pos in enumerate(st.session_state.portfolio, start=1):
 df = pd.DataFrame(rows)
 df = df.reset_index(drop=True)
 
-# poradie ako text → zarovná sa naľavo
 df["poradie"] = df["poradie"].astype(str)
 
-df_display = add_units(df).rename(columns=st.session_state.column_names)
+df_display = df.rename(columns=st.session_state.column_names)
 
 edited_df = st.data_editor(
     df_display,
@@ -219,7 +193,6 @@ edited_df = st.data_editor(
     }
 )
 
-# uloženie množstva
 for i, row in edited_df.iterrows():
     st.session_state.portfolio[i]["shares"] = float(row["mnozstvo"])
 st.subheader("Ohlásené dividendy")
