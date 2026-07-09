@@ -14,12 +14,6 @@ if "column_names" not in st.session_state:
 
 if "settings_open" not in st.session_state:
     st.session_state.settings_open = False
-
-if "ticker_input" not in st.session_state:
-    st.session_state.ticker_input = ""
-
-if "shares_input" not in st.session_state:
-    st.session_state.shares_input = ""
 def infer_frequency(divs):
     if len(divs) < 2:
         return "neznáme"
@@ -61,25 +55,15 @@ def add_units(df):
 col_add, col_settings = st.sidebar.columns([4,1])
 
 with col_add:
-    st.session_state.ticker_input = st.text_input(
-        "Ticker (napr. MA, MA.TO)",
-        value=st.session_state.ticker_input
-    ).strip().upper()
-
-    st.session_state.shares_input = st.text_input(
-        "Množstvo akcií",
-        value=st.session_state.shares_input
-    ).strip()
+    ticker = st.text_input("Ticker (napr. MA, MA.TO)", key="ticker_input").strip().upper()
+    shares = st.text_input("Množstvo akcií", key="shares_input").strip()
 
     if st.button("Pridať"):
         try:
-            shares_val = float(st.session_state.shares_input)
-            if st.session_state.ticker_input and shares_val > 0:
-                st.session_state.portfolio.append({
-                    "ticker": st.session_state.ticker_input,
-                    "shares": shares_val
-                })
-                st.success(f"Pridané {st.session_state.ticker_input}")
+            shares_val = float(shares)
+            if ticker and shares_val > 0:
+                st.session_state.portfolio.append({"ticker": ticker, "shares": shares_val})
+                st.success(f"Pridané {ticker}")
 
                 # reset inputov
                 st.session_state.ticker_input = ""
@@ -176,7 +160,6 @@ for idx, pos in enumerate(st.session_state.portfolio, start=1):
         if price and last_amt > 0:
             future_yield = last_amt / price * 100
 
-        # presnejší kvartálny posun
         if freq == "mesačne": next_ex = last_date + timedelta(days=30)
         elif freq == "kvartálne": next_ex = last_date + timedelta(days=91)
         elif freq == "polročne": next_ex = last_date + timedelta(days=180)
@@ -244,6 +227,8 @@ st.subheader("Ohlásené dividendy")
 if official:
     div_df = pd.DataFrame(official)
     div_df = div_df.reset_index(drop=True)
+
+    div_df["poradie"] = div_df["poradie"].astype(str)
 
     div_df["div_amount"] = div_df["div_amount"].apply(lambda x: f"{x:.2f}")
     div_df["div_amount_total"] = div_df["div_amount_total"].apply(lambda x: f"{x:.2f}")
