@@ -13,6 +13,7 @@ if "portfolio" not in st.session_state:
 if "column_labels" not in st.session_state:
     st.session_state.column_labels = {
         "ticker": "Ticker",
+        "company_name": "Názov firmy",
         "burza": "Burza",
         "mena": "Mena",
         "mnozstvo": "Množstvo akcií",
@@ -28,7 +29,6 @@ if "column_labels" not in st.session_state:
         "buduca_div_spolu": "Budúca div. spolu",
         "buduci_div_vynos_%": "Budúci div. výnos %",
         "next_ex_div_date": "Budúci Ex-div dátum",
-        "company_name": "Názov firmy",
     }
 
 # ---------- HELPER FUNKCIE ----------
@@ -53,11 +53,13 @@ def freq_per_year(freq_text: str) -> int:
 def add_units(df):
     df = df.copy()
 
+    # percentá
     pct_cols = ["dividendovy_vynos_%", "buduci_div_vynos_%"]
     for col in pct_cols:
         if col in df.columns:
             df[col] = df[col].apply(lambda x: f"{x:.2f} %" if pd.notna(x) else "")
 
+    # mena
     if "mena" in df.columns:
         currency = df["mena"].iloc[0] if df["mena"].iloc[0] else ""
         money_cols = [
@@ -67,94 +69,3 @@ def add_units(df):
             "rocna_div_na_akciu",
             "rocna_div_spolu",
             "buduca_div_na_akciu",
-            "buduca_div_spolu",
-        ]
-        for col in money_cols:
-            if col in df.columns:
-                df[col] = df[col].apply(
-                    lambda x: f"{x:.2f} {currency}" if pd.notna(x) else ""
-                )
-
-    return df
-
-# ---------- SIDEBAR: PRIDANIE AKCIE ----------
-
-st.sidebar.header("Pridaj akciu do portfólia")
-
-ticker_input = st.sidebar.text_input("Ticker (napr. MA, MA.TO, MA.DE)").strip().upper()
-shares_input = st.sidebar.number_input("Množstvo akcií", min_value=0.0, step=1.0)
-
-if st.sidebar.button("Pridať do portfólia"):
-    if ticker_input and shares_input > 0:
-        st.session_state.portfolio.append(
-            {"ticker": ticker_input, "shares": shares_input}
-        )
-        st.sidebar.success(f"Pridané: {ticker_input} ({shares_input} ks)")
-    else:
-        st.sidebar.error("Zadaj ticker a množstvo väčšie ako 0.")
-
-# ---------- HLAVNÁ ČASŤ: PORTFÓLIO ----------
-
-st.subheader("Moje portfólio")
-
-if not st.session_state.portfolio:
-    st.info("Zatiaľ nemáš žiadne akcie v portfóliu. Pridaj ich v ľavom paneli.")
-    st.stop()
-
-portfolio_df = pd.DataFrame(st.session_state.portfolio)
-st.dataframe(portfolio_df, use_container_width=True)
-
-# ---------- MOŽNOSŤ UPRAVIŤ POČET AKCIÍ ----------
-
-st.subheader("Upraviť množstvo akcií")
-
-for i, pos in enumerate(st.session_state.portfolio):
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        st.write(f"**{pos['ticker']}**")
-    with col2:
-        new_shares = st.number_input(
-            f"Nové množstvo pre {pos['ticker']}",
-            min_value=0.0,
-            step=1.0,
-            value=float(pos["shares"]),
-            key=f"shares_edit_{i}",
-        )
-    with col3:
-        if st.button("Uložiť", key=f"save_{i}"):
-            st.session_state.portfolio[i]["shares"] = new_shares
-            st.success(f"Množstvo pre {pos['ticker']} upravené na {new_shares}")
-
-# ---------- SPRACOVANIE DÁT ----------
-
-all_rows = []
-official_div_rows = []
-
-current_year = datetime.now().year
-
-for pos in st.session_state.portfolio:
-    ticker = pos["ticker"]
-    shares = pos["shares"]
-
-    try:
-        t = yf.Ticker(ticker)
-
-        hist = t.history(period="1d")
-        if not hist.empty:
-            price = float(hist["Close"].iloc[-1])
-        else:
-            price = None
-
-        info = getattr(t, "info", {})
-        exchange = info.get("exchange", "neznáme")
-        currency = info.get("currency", "USD")
-        company_name = info.get("shortName", "")
-
-        dividends = t.dividends
-
-        last_amount = None
-        last_date = None
-        freq_text = "neznáme"
-        annual_div_per_share = 0.0
-        dividend_yield_pct = 0.0
-        annual_div
