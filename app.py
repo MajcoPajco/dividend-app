@@ -49,21 +49,44 @@ def add_units(df):
                 df[c] = df[c].apply(lambda x: f"{x:.2f} {cur}" if pd.notna(x) else "")
 
     return df
-st.sidebar.header("Pridaj akciu")
+col_add, col_settings = st.sidebar.columns([3,1])
 
-ticker = st.sidebar.text_input("Ticker (napr. MA, MA.TO)").strip().upper()
-shares = st.sidebar.text_input("Množstvo akcií").strip()
+with col_add:
+    ticker = st.text_input("Ticker (napr. MA, MA.TO)").strip().upper()
+    shares = st.text_input("Množstvo akcií").strip()
 
-if st.sidebar.button("Pridať"):
-    try:
-        shares_val = float(shares)
-        if ticker and shares_val > 0:
-            st.session_state.portfolio.append({"ticker":ticker,"shares":shares_val})
-            st.sidebar.success(f"Pridané {ticker}")
-        else:
-            st.sidebar.error("Zadaj ticker a množstvo > 0")
-    except:
-        st.sidebar.error("Zadaj platné číslo")
+    if st.button("Pridať"):
+        try:
+            shares_val = float(shares)
+            if ticker and shares_val > 0:
+                st.session_state.portfolio.append({"ticker":ticker,"shares":shares_val})
+                st.success(f"Pridané {ticker}")
+            else:
+                st.error("Zadaj ticker a množstvo > 0")
+        except:
+            st.error("Zadaj platné číslo")
+
+with col_settings:
+    open_settings = st.button("⚙️")
+if open_settings:
+    st.sidebar.subheader("Nastavenia")
+
+    st.sidebar.write("### Premenovanie stĺpcov")
+    for col in st.session_state.column_names.keys() | {"poradie","ticker","company_name","burza","mena","mnozstvo","aktualna_cena","hodnota_pozicie","posledna_dividenda_na_akciu","posledny_div_datum","frekvencia","rocna_div_na_akciu","rocna_div_spolu","dividendovy_vynos_%","buduca_div_na_akciu","buduca_div_spolu","buduci_div_vynos_%","next_ex_div_date"}:
+        new_name = st.sidebar.text_input(f"Názov pre '{col}'", value=st.session_state.column_names.get(col,col))
+        st.session_state.column_names[col] = new_name
+
+    st.sidebar.write("### Označenia búrz")
+    st.sidebar.table(pd.DataFrame({
+        "Yahoo kód":["NYQ","NMS","ASE","PCX","BATS","TSX","LSE","FRA","GER","MIL","SWX"],
+        "Burza":["NYSE","NASDAQ","AMEX","NYSE Arca","BATS","Toronto","London","Frankfurt","Xetra","Milano","Swiss"]
+    }))
+
+    st.sidebar.write("### Označenia mien")
+    st.sidebar.table(pd.DataFrame({
+        "Kód":["USD","EUR","GBP","CHF","JPY","CAD","AUD"],
+        "Mena":["Americký dolár","Euro","Britská libra","Švajčiarsky frank","Japonský jen","Kanadský dolár","Austrálsky dolár"]
+    }))
 st.subheader("Detailné informácie o akciách")
 
 if not st.session_state.portfolio:
@@ -116,7 +139,7 @@ for idx, pos in enumerate(st.session_state.portfolio, start=1):
         if price and last_amt > 0:
             future_yield = last_amt / price * 100
 
-        # presnejší kvartálny posun (Mastercard)
+        # presnejší kvartálny posun
         if freq == "mesačne": next_ex = last_date + timedelta(days=30)
         elif freq == "kvartálne": next_ex = last_date + timedelta(days=91)
         elif freq == "polročne": next_ex = last_date + timedelta(days=180)
@@ -156,12 +179,7 @@ for idx, pos in enumerate(st.session_state.portfolio, start=1):
 df = pd.DataFrame(rows)
 df = add_units(df)
 
-# edit názvov stĺpcov
-st.write("Premenovanie stĺpcov:")
-for col in df.columns:
-    new_name = st.text_input(f"Názov pre '{col}'", value=st.session_state.column_names.get(col, col))
-    st.session_state.column_names[col] = new_name
-
+# Premenovanie stĺpcov
 df = df.rename(columns=st.session_state.column_names)
 
 edited_df = st.data_editor(
@@ -178,7 +196,7 @@ edited_df = st.data_editor(
     }
 )
 
-# aktualizácia množstva akcií
+# Uloženie zmien množstva
 for i, row in edited_df.iterrows():
     st.session_state.portfolio[i]["shares"] = float(row["mnozstvo"])
 st.subheader("Ohlásené dividendy")
