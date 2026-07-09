@@ -216,6 +216,9 @@ for idx, pos in enumerate(st.session_state.portfolio, start=1):
 df = pd.DataFrame(rows)
 df = df.reset_index(drop=True)
 
+# poradie ako text → zarovná sa naľavo
+df["poradie"] = df["poradie"].astype(str)
+
 df_display = add_units(df).rename(columns=st.session_state.column_names)
 
 edited_df = st.data_editor(
@@ -224,7 +227,7 @@ edited_df = st.data_editor(
     hide_index=True,
     key="detail_editor",
     column_config={
-        "poradie": st.column_config.NumberColumn("Poradie", align="left", disabled=True),
+        "poradie": st.column_config.TextColumn("Poradie", disabled=True),
         "ticker": st.column_config.TextColumn("Ticker", disabled=True),
         "company_name": st.column_config.TextColumn("Názov firmy", disabled=True),
         "burza": st.column_config.TextColumn("Burza", disabled=True),
