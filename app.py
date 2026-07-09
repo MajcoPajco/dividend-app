@@ -28,6 +28,7 @@ if "column_labels" not in st.session_state:
         "buduca_div_spolu": "Budúca div. spolu",
         "buduci_div_vynos_%": "Budúci div. výnos %",
         "next_ex_div_date": "Budúci Ex-div dátum",
+        "company_name": "Názov firmy",
     }
 
 # ---------- HELPER FUNKCIE ----------
@@ -49,6 +50,36 @@ def infer_frequency(dividends: pd.Series):
 def freq_per_year(freq_text: str) -> int:
     return {"mesačne": 12, "kvartálne": 4, "polročne": 2, "ročne": 1}.get(freq_text, 0)
 
+def add_units(df):
+    """Pridá jednotky do tabuľky (%, USD, EUR, …)."""
+    df = df.copy()
+
+    # percentá
+    pct_cols = ["dividendovy_vynos_%", "buduci_div_vynos_%"]
+    for col in pct_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: f"{x:.2f} %" if pd.notna(x) else "")
+
+    # mena
+    if "mena" in df.columns:
+        currency = df["mena"].iloc[0] if df["mena"].iloc[0] else ""
+        money_cols = [
+            "aktualna_cena",
+            "hodnota_pozicie",
+            "posledna_dividenda_na_akciu",
+            "rocna_div_na_akciu",
+            "rocna_div_spolu",
+            "buduca_div_na_akciu",
+            "buduca_div_spolu",
+        ]
+        for col in money_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(
+                    lambda x: f"{x:.2f} {currency}" if pd.notna(x) else ""
+                )
+
+    return df
+
 # ---------- SIDEBAR: PRIDANIE AKCIE ----------
 
 st.sidebar.header("Pridaj akciu do portfólia")
@@ -64,13 +95,6 @@ if st.sidebar.button("Pridať do portfólia"):
         st.sidebar.success(f"Pridané: {ticker_input} ({shares_input} ks)")
     else:
         st.sidebar.error("Zadaj ticker a množstvo väčšie ako 0.")
-
-# ---------- NASTAVENIA STĹPCOV ----------
-
-with st.sidebar.expander("Premenovanie stĺpcov"):
-    for key, default_label in st.session_state.column_labels.items():
-        new_label = st.text_input(f"Názov stĺpca pre '{key}'", value=default_label)
-        st.session_state.column_labels[key] = new_label
 
 # ---------- HLAVNÁ ČASŤ: PORTFÓLIO ----------
 
@@ -107,8 +131,7 @@ for i, pos in enumerate(st.session_state.portfolio):
 # ---------- SPRACOVANIE DÁT ----------
 
 all_rows = []
-dividend_history_rows = []
-upcoming_ex_div_rows = []
+official_div_rows = []
 
 current_year = datetime.now().year
 
@@ -121,166 +144,4 @@ for pos in st.session_state.portfolio:
 
         # Aktuálna cena
         hist = t.history(period="1d")
-        if hist.empty:
-            price = None
-        else:
-            price = float(hist["Close"].iloc[-1])
-
-        info = getattr(t, "info", {})
-        exchange = info.get("exchange", "neznáme")
-        currency = info.get("currency", "neznáme")
-
-        # Dividendy (história)
-        dividends = t.dividends
-
-        last_amount = None
-        last_date = None
-        freq_text = "neznáme"
-        annual_div_per_share = 0.0
-        dividend_yield_pct = 0.0
-        annual_div_total = 0.0
-        future_div_yield_pct = 0.0
-        future_div_total = 0.0
-        next_ex_div_date = None
-
-        if dividends is not None and not dividends.empty:
-            last_amount = float(dividends.iloc[-1])
-            last_date = dividends.index[-1].to_pydatetime()
-
-            freq_text = infer_frequency(dividends)
-            freq_per_year_val = freq_per_year(freq_text)
-
-            if freq_per_year_val > 0:
-                annual_div_per_share = last_amount * freq_per_year_val
-            else:
-                annual_div_per_share = 0.0
-
-            if price and annual_div_per_share > 0:
-                dividend_yield_pct = annual_div_per_share / price * 100
-            else:
-                dividend_yield_pct = 0.0
-
-            annual_div_total = annual_div_per_share * shares
-
-            # Budúca (najbližšia) dividenda – berieme poslednú ako reprezentatívnu
-            future_div_total = last_amount * shares
-            if price and last_amount > 0:
-                future_div_yield_pct = last_amount / price * 100
-            else:
-                future_div_yield_pct = 0.0
-
-            # História dividend v aktuálnom roku (mesačné súčty)
-            div_df = dividends.to_frame(name="div_per_share")
-            div_df["date"] = div_df.index
-            div_df["year"] = div_df["date"].dt.year
-            div_df["month"] = div_df["date"].dt.month
-            div_df["div_total"] = div_df["div_per_share"] * shares
-
-            current_year_div = div_df[div_df["year"] == current_year]
-            monthly_sum = (
-                current_year_div.groupby("month")["div_total"].sum().reset_index()
-            )
-            monthly_sum["ticker"] = ticker
-
-            for _, row in monthly_sum.iterrows():
-                dividend_history_rows.append(
-                    {
-                        "ticker": ticker,
-                        "month": int(row["month"]),
-                        "div_total": float(row["div_total"]),
-                    }
-                )
-
-            # Odhad najbližšieho ex-div dátumu na základe frekvencie
-            if freq_text == "mesačne":
-                next_ex_div_date = last_date + timedelta(days=30)
-            elif freq_text == "kvartálne":
-                next_ex_div_date = last_date + timedelta(days=90)
-            elif freq_text == "polročne":
-                next_ex_div_date = last_date + timedelta(days=180)
-            elif freq_text == "ročne":
-                next_ex_div_date = last_date + timedelta(days=365)
-            else:
-                next_ex_div_date = None
-
-            if next_ex_div_date:
-                upcoming_ex_div_rows.append(
-                    {
-                        "ticker": ticker,
-                        "next_ex_div_date": next_ex_div_date.date(),
-                        "div_yield_pct": dividend_yield_pct,
-                        "next_div_amount_total": future_div_total,
-                    }
-                )
-
-        all_rows.append(
-            {
-                "ticker": ticker,
-                "burza": exchange,
-                "mena": currency,
-                "mnozstvo": shares,
-                "aktualna_cena": price,
-                "hodnota_pozicie": price * shares if price else None,
-                "posledna_dividenda_na_akciu": last_amount,
-                "posledny_div_datum": last_date.date() if last_date else None,
-                "frekvencia": freq_text,
-                "rocna_div_na_akciu": annual_div_per_share,
-                "rocna_div_spolu": annual_div_total,
-                "dividendovy_vynos_%": dividend_yield_pct,
-                "buduca_div_na_akciu": last_amount,
-                "buduca_div_spolu": future_div_total,
-                "buduci_div_vynos_%": future_div_yield_pct,
-                "next_ex_div_date": next_ex_div_date.date() if next_ex_div_date else None,
-            }
-        )
-
-    except Exception as e:
-        st.error(f"Chyba pri spracovaní tickeru {ticker}: {e}")
-
-# ---------- DETAILNÁ TABUĽKA ----------
-
-if all_rows:
-    st.subheader("Detailné informácie o akciách")
-    details_df = pd.DataFrame(all_rows)
-
-    # Premenovanie stĺpcov podľa nastavení
-    rename_map = {
-        col: st.session_state.column_labels.get(col, col)
-        for col in details_df.columns
-    }
-    details_df = details_df.rename(columns=rename_map)
-
-    st.dataframe(details_df, use_container_width=True)
-
-# ---------- GRAF MESAČNÝCH DIVIDEND ----------
-
-if dividend_history_rows:
-    st.subheader(f"História vyplatených dividend v roku {current_year}")
-
-    hist_df = pd.DataFrame(dividend_history_rows)
-    total_monthly = hist_df.groupby("month")["div_total"].sum().reset_index()
-    total_monthly["month_name"] = total_monthly["month"].apply(
-        lambda m: datetime(current_year, m, 1).strftime("%b")
-    )
-
-    st.bar_chart(
-        data=total_monthly.set_index("month_name")["div_total"],
-        use_container_width=True,
-    )
-
-    with st.expander("Detail podľa tickerov"):
-        st.dataframe(hist_df, use_container_width=True)
-else:
-    st.info("Nemám históriu dividend pre aktuálny rok (možno ticker nevypláca dividendy alebo chýbajú dáta).")
-
-# ---------- ZOZNAM BUDÚCICH (ODHADOVANÝCH) EX-DIV DÁTUMOV ----------
-
-if upcoming_ex_div_rows:
-    st.subheader("Odhad najbližších Ex-div dátumov (na základe histórie)")
-
-    upcoming_df = pd.DataFrame(upcoming_ex_div_rows)
-    upcoming_df = upcoming_df.sort_values("next_ex_div_date")
-
-    st.dataframe(upcoming_df, use_container_width=True)
-else:
-    st.info("Z histórie sa nepodarilo odhadnúť najbližšie Ex-div dátumy.")
+        price = float(hist["Close"].iloc[-1]) if not hist.empty
