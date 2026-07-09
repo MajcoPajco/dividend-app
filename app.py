@@ -11,6 +11,15 @@ if "portfolio" not in st.session_state:
 
 if "column_names" not in st.session_state:
     st.session_state.column_names = {}
+
+if "settings_open" not in st.session_state:
+    st.session_state.settings_open = False
+
+if "ticker_input" not in st.session_state:
+    st.session_state.ticker_input = ""
+
+if "shares_input" not in st.session_state:
+    st.session_state.shares_input = ""
 def infer_frequency(divs):
     if len(divs) < 2:
         return "neznáme"
@@ -49,31 +58,57 @@ def add_units(df):
                 df[c] = df[c].apply(lambda x: f"{x:.2f} {cur}" if pd.notna(x) else "")
 
     return df
-col_add, col_settings = st.sidebar.columns([3,1])
+col_add, col_settings = st.sidebar.columns([4,1])
 
 with col_add:
-    ticker = st.text_input("Ticker (napr. MA, MA.TO)").strip().upper()
-    shares = st.text_input("Množstvo akcií").strip()
+    st.session_state.ticker_input = st.text_input(
+        "Ticker (napr. MA, MA.TO)",
+        value=st.session_state.ticker_input
+    ).strip().upper()
+
+    st.session_state.shares_input = st.text_input(
+        "Množstvo akcií",
+        value=st.session_state.shares_input
+    ).strip()
 
     if st.button("Pridať"):
         try:
-            shares_val = float(shares)
-            if ticker and shares_val > 0:
-                st.session_state.portfolio.append({"ticker":ticker,"shares":shares_val})
-                st.success(f"Pridané {ticker}")
+            shares_val = float(st.session_state.shares_input)
+            if st.session_state.ticker_input and shares_val > 0:
+                st.session_state.portfolio.append({
+                    "ticker": st.session_state.ticker_input,
+                    "shares": shares_val
+                })
+                st.success(f"Pridané {st.session_state.ticker_input}")
+
+                # reset inputov
+                st.session_state.ticker_input = ""
+                st.session_state.shares_input = ""
             else:
                 st.error("Zadaj ticker a množstvo > 0")
         except:
             st.error("Zadaj platné číslo")
 
 with col_settings:
-    open_settings = st.button("⚙️")
-if open_settings:
+    if st.button("⚙️"):
+        st.session_state.settings_open = not st.session_state.settings_open
+if st.session_state.settings_open:
     st.sidebar.subheader("Nastavenia")
 
     st.sidebar.write("### Premenovanie stĺpcov")
-    for col in st.session_state.column_names.keys() | {"poradie","ticker","company_name","burza","mena","mnozstvo","aktualna_cena","hodnota_pozicie","posledna_dividenda_na_akciu","posledny_div_datum","frekvencia","rocna_div_na_akciu","rocna_div_spolu","dividendovy_vynos_%","buduca_div_na_akciu","buduca_div_spolu","buduci_div_vynos_%","next_ex_div_date"}:
-        new_name = st.sidebar.text_input(f"Názov pre '{col}'", value=st.session_state.column_names.get(col,col))
+    all_cols = [
+        "poradie","ticker","company_name","burza","mena","mnozstvo",
+        "aktualna_cena","hodnota_pozicie","posledna_dividenda_na_akciu",
+        "posledny_div_datum","frekvencia","rocna_div_na_akciu",
+        "rocna_div_spolu","dividendovy_vynos_%","buduca_div_na_akciu",
+        "buduca_div_spolu","buduci_div_vynos_%","next_ex_div_date"
+    ]
+
+    for col in all_cols:
+        new_name = st.sidebar.text_input(
+            f"Názov pre '{col}'",
+            value=st.session_state.column_names.get(col, col)
+        )
         st.session_state.column_names[col] = new_name
 
     st.sidebar.write("### Označenia búrz")
@@ -177,14 +212,14 @@ for idx, pos in enumerate(st.session_state.portfolio, start=1):
         "next_ex_div_date": eu_date(next_ex) if next_ex else ""
     })
 df = pd.DataFrame(rows)
-df = add_units(df)
+df = df.reset_index(drop=True)  # odstráni indexový stĺpec
 
-# Premenovanie stĺpcov
-df = df.rename(columns=st.session_state.column_names)
+df_display = add_units(df).rename(columns=st.session_state.column_names)
 
 edited_df = st.data_editor(
-    df,
+    df_display,
     use_container_width=True,
+    hide_index=True,
     key="detail_editor",
     column_config={
         "poradie": st.column_config.NumberColumn("Poradie", disabled=True),
@@ -196,18 +231,19 @@ edited_df = st.data_editor(
     }
 )
 
-# Uloženie zmien množstva
+# uloženie množstva z pôvodného DF (bez jednotiek)
 for i, row in edited_df.iterrows():
     st.session_state.portfolio[i]["shares"] = float(row["mnozstvo"])
 st.subheader("Ohlásené dividendy")
 
 if official:
     div_df = pd.DataFrame(official)
+    div_df = div_df.reset_index(drop=True)
 
     div_df["div_amount"] = div_df["div_amount"].apply(lambda x: f"{x:.2f}")
     div_df["div_amount_total"] = div_df["div_amount_total"].apply(lambda x: f"{x:.2f}")
     div_df["div_yield_pct"] = div_df["div_yield_pct"].apply(lambda x: f"{x:.2f} %")
 
-    st.dataframe(div_df, use_container_width=True)
+    st.dataframe(div_df, use_container_width=True, hide_index=True)
 else:
     st.info("Žiadne ohlásené dividendy.")
