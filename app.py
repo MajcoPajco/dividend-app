@@ -102,40 +102,32 @@ st.caption(
     "(zobrazuje sa čas zostávajúci do otvorenia)."
 )
 
-st.markdown("---")
-
 st.markdown(
     """
     <style>
-    .exchange-card {
-        border-radius: 14px;
-        padding: 18px 20px;
-        margin-bottom: 16px;
-        background-color: rgba(128, 128, 128, 0.06);
-        border: 1px solid rgba(128, 128, 128, 0.25);
-        min-height: 150px;
+    .exchange-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14.5px;
     }
-    .exchange-name {
-        font-size: 17px;
-        font-weight: 700;
-        margin-bottom: 2px;
+    .exchange-table th {
+        text-align: left;
+        padding: 6px 12px;
+        border-bottom: 2px solid rgba(128, 128, 128, 0.35);
+        opacity: 0.65;
+        font-weight: 600;
+        font-size: 12.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
     }
-    .exchange-city {
-        font-size: 13px;
-        opacity: 0.7;
-        margin-bottom: 10px;
+    .exchange-table td {
+        padding: 7px 12px;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+        white-space: nowrap;
     }
-    .exchange-local-time {
-        font-size: 13px;
-        opacity: 0.85;
-        margin-bottom: 8px;
-    }
-    .status-line {
-        font-size: 17px;
-        font-weight: 700;
-    }
-    .status-open { color: #22c55e; }
-    .status-closed { color: #ef4444; }
+    .row-open td { color: #22c55e; font-weight: 600; }
+    .row-closed td { color: #ef4444; font-weight: 600; }
+    .status-badge { font-weight: 700; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -146,34 +138,46 @@ results = [(ex, get_status(ex, now_utc)) for ex in EXCHANGES]
 # Zoradenie: otvorené burzy hore, potom podľa najbližšieho času do otvorenia
 results.sort(key=lambda item: (not item[1]["is_open"], item[1]["delta"]))
 
-cols = st.columns(3)
-for i, (ex, status) in enumerate(results):
-    col = cols[i % 3]
-    with col:
-        local_time_str = status["local_time"].strftime("%H:%M")
+rows_html = ""
+for ex, status in results:
+    local_time_str = status["local_time"].strftime("%H:%M")
+    row_class = "row-open" if status["is_open"] else "row-closed"
 
-        if status["is_open"]:
-            status_html = (
-                f'<div class="status-line status-open">'
-                f'🟢 Otvorené &middot; už {format_delta(status["delta"])}</div>'
-            )
-        else:
-            status_html = (
-                f'<div class="status-line status-closed">'
-                f'🔴 Zatvorené &middot; otvára o {format_delta(status["delta"])}</div>'
-            )
+    if status["is_open"]:
+        stav = "🟢 Otvorené"
+        info = f"už {format_delta(status['delta'])}"
+    else:
+        stav = "🔴 Zatvorené"
+        info = f"otvára o {format_delta(status['delta'])}"
 
-        st.markdown(
-            f"""
-            <div class="exchange-card">
-                <div class="exchange-name">{ex['flag']} {ex['name']} ({ex['code']})</div>
-                <div class="exchange-city">{ex['city']}</div>
-                <div class="exchange-local-time">Miestny čas: {local_time_str}</div>
-                {status_html}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    rows_html += f"""
+        <tr class="{row_class}">
+            <td>{ex['flag']} {ex['name']} ({ex['code']})</td>
+            <td>{ex['city']}</td>
+            <td>{local_time_str}</td>
+            <td class="status-badge">{stav}</td>
+            <td>{info}</td>
+        </tr>
+    """
+
+table_html = f"""
+<table class="exchange-table">
+    <thead>
+        <tr>
+            <th>Burza</th>
+            <th>Mesto</th>
+            <th>Miestny čas</th>
+            <th>Stav</th>
+            <th>Info</th>
+        </tr>
+    </thead>
+    <tbody>
+        {rows_html}
+    </tbody>
+</table>
+"""
+
+st.markdown(table_html, unsafe_allow_html=True)
 
 st.markdown("---")
 st.caption(
