@@ -17,31 +17,31 @@ st.set_page_config(
 
 BRATISLAVA_TZ = ZoneInfo("Europe/Bratislava")
 
-# Zoznam najznámejších búrz: názov, kód, mesto, časové pásmo, čas otvorenia/zatvorenia (miestny čas burzy)
+# Zoznam najznámejších búrz: názov, kód, mesto, štát, časové pásmo, čas otvorenia/zatvorenia (miestny čas burzy)
 EXCHANGES = [
-    {"name": "New York Stock Exchange", "code": "NYSE", "city": "New York, USA",
+    {"name": "New York Stock Exchange", "code": "NYSE", "city": "New York", "country": "USA",
      "tz": "America/New_York", "open": "09:30", "close": "16:00", "flag": "🇺🇸"},
-    {"name": "NASDAQ", "code": "NASDAQ", "city": "New York, USA",
+    {"name": "NASDAQ", "code": "NASDAQ", "city": "New York", "country": "USA",
      "tz": "America/New_York", "open": "09:30", "close": "16:00", "flag": "🇺🇸"},
-    {"name": "Toronto Stock Exchange", "code": "TSX", "city": "Toronto, Kanada",
+    {"name": "Toronto Stock Exchange", "code": "TSX", "city": "Toronto", "country": "Kanada",
      "tz": "America/Toronto", "open": "09:30", "close": "16:00", "flag": "🇨🇦"},
-    {"name": "London Stock Exchange", "code": "LSE", "city": "Londýn, Spojené kráľovstvo",
+    {"name": "London Stock Exchange", "code": "LSE", "city": "Londýn", "country": "Spojené kráľovstvo",
      "tz": "Europe/London", "open": "08:00", "close": "16:30", "flag": "🇬🇧"},
-    {"name": "Euronext Paris", "code": "EPA", "city": "Paríž, Francúzsko",
+    {"name": "Euronext Paris", "code": "EPA", "city": "Paríž", "country": "Francúzsko",
      "tz": "Europe/Paris", "open": "09:00", "close": "17:30", "flag": "🇫🇷"},
-    {"name": "Deutsche Börse (Xetra)", "code": "FRA", "city": "Frankfurt, Nemecko",
+    {"name": "Deutsche Börse (Xetra)", "code": "FRA", "city": "Frankfurt", "country": "Nemecko",
      "tz": "Europe/Berlin", "open": "09:00", "close": "17:30", "flag": "🇩🇪"},
-    {"name": "SIX Swiss Exchange", "code": "SIX", "city": "Zürich, Švajčiarsko",
+    {"name": "SIX Swiss Exchange", "code": "SIX", "city": "Zürich", "country": "Švajčiarsko",
      "tz": "Europe/Zurich", "open": "09:00", "close": "17:30", "flag": "🇨🇭"},
-    {"name": "Tokyo Stock Exchange", "code": "TSE", "city": "Tokio, Japonsko",
+    {"name": "Tokyo Stock Exchange", "code": "TSE", "city": "Tokio", "country": "Japonsko",
      "tz": "Asia/Tokyo", "open": "09:00", "close": "15:00", "flag": "🇯🇵"},
-    {"name": "Hong Kong Stock Exchange", "code": "HKEX", "city": "Hongkong",
+    {"name": "Hong Kong Stock Exchange", "code": "HKEX", "city": "Hongkong", "country": "Čína",
      "tz": "Asia/Hong_Kong", "open": "09:30", "close": "16:00", "flag": "🇭🇰"},
-    {"name": "Shanghai Stock Exchange", "code": "SSE", "city": "Šanghaj, Čína",
+    {"name": "Shanghai Stock Exchange", "code": "SSE", "city": "Šanghaj", "country": "Čína",
      "tz": "Asia/Shanghai", "open": "09:30", "close": "15:00", "flag": "🇨🇳"},
-    {"name": "Bombay Stock Exchange", "code": "BSE", "city": "Bombaj, India",
+    {"name": "Bombay Stock Exchange", "code": "BSE", "city": "Bombaj", "country": "India",
      "tz": "Asia/Kolkata", "open": "09:15", "close": "15:30", "flag": "🇮🇳"},
-    {"name": "Australian Securities Exchange", "code": "ASX", "city": "Sydney, Austrália",
+    {"name": "Australian Securities Exchange", "code": "ASX", "city": "Sydney", "country": "Austrália",
      "tz": "Australia/Sydney", "open": "10:00", "close": "16:00", "flag": "🇦🇺"},
 ]
 
@@ -108,14 +108,18 @@ st.caption(
 # odsadený reťazec.
 BOARD_CSS = (
     "<style>"
-    ".board-wrap{background:#0b0f14;border-radius:10px;padding:6px 0;border:1px solid #1e2530;}"
-    ".board{width:100%;border-collapse:collapse;font-family:'Courier New',Consolas,monospace;}"
-    ".board th{text-align:left;padding:8px 18px;font-size:12px;letter-spacing:0.12em;"
-    "color:#5b6674;text-transform:uppercase;border-bottom:1px solid #1e2530;}"
-    ".board td{padding:9px 18px;font-size:16px;letter-spacing:0.05em;white-space:nowrap;}"
-    ".row-open td{color:#2ee66b;text-shadow:0 0 6px rgba(46,230,107,0.35);}"
-    ".row-closed td{color:#ff4d4d;text-shadow:0 0 6px rgba(255,77,77,0.25);}"
-    ".board tr{border-bottom:1px solid #161b22;}"
+    ".board-wrap{background:#ffffff;border-radius:10px;padding:0;border:1px solid #e3e6ea;"
+    "overflow:hidden;}"
+    ".board{width:100%;border-collapse:collapse;border-spacing:0;"
+    "font-family:'Courier New',Consolas,monospace;}"
+    ".board th{text-align:left;padding:8px 16px;font-size:11.5px;letter-spacing:0.1em;"
+    "color:#8a93a1;text-transform:uppercase;border-bottom:1px solid #e3e6ea;"
+    "background:#fafbfc;}"
+    ".board td{padding:6px 16px;font-size:15px;letter-spacing:0.02em;white-space:nowrap;"
+    "line-height:1.1;border-bottom:1px solid #f0f1f3;}"
+    ".board tr:last-child td{border-bottom:none;}"
+    ".row-open td{color:#15a24a;}"
+    ".row-closed td{color:#e0362b;}"
     ".code-cell{font-weight:700;}"
     "</style>"
 )
@@ -139,6 +143,8 @@ for ex, status in results:
     row_parts.append(
         f'<tr class="{row_class}">'
         f'<td class="code-cell">{ex["flag"]} {ex["code"]}</td>'
+        f'<td>{ex["city"]}</td>'
+        f'<td>{ex["country"]}</td>'
         f'<td>{local_time_str}</td>'
         f'<td>{stav}</td>'
         f'</tr>'
@@ -146,7 +152,7 @@ for ex, status in results:
 
 table_html = (
     '<div class="board-wrap"><table class="board">'
-    '<thead><tr><th>Burza</th><th>Miestny čas</th><th>Stav</th></tr></thead>'
+    '<thead><tr><th>Burza</th><th>Mesto</th><th>Štát</th><th>Miestny čas</th><th>Stav</th></tr></thead>'
     f'<tbody>{"".join(row_parts)}</tbody>'
     '</table></div>'
 )
