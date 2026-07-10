@@ -231,7 +231,6 @@ with st.form(key="add_stock_form", clear_on_submit=True):
     with c2:
         qty_in = st.number_input(
             "Množstvo",
-            min_value=0.0001,
             step=0.0001,
             value=None,
             format="%.4f",
