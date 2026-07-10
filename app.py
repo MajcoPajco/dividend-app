@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import streamlit as st
-from datetime import datetime, timedelta
+import pandas as pd
+import yfinance as yf
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 # Automatické obnovovanie stránky každú minútu (ak je knižnica dostupná)
@@ -152,3 +156,232 @@ table_html = (
 )
 
 st.markdown(table_html, unsafe_allow_html=True)
+
+
+# ============================================================
+# DIVIDEND TRACKER
+# ============================================================
+
+if "holdings" not in st.session_state:
+    st.session_state.holdings = {}  # {ticker: mnozstvo}
+
+
+def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
+    """Čistá (bez siete) funkcia, ktorá spracuje surové dáta z yfinance do prehľadného záznamu."""
+    price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+    if price is None:
+        return None
+
+    name = info.get("shortName") or info.get("longName") or ticker
+    currency = info.get("currency") or ""
+
+    last_div_amount = None
+    last_div_date = None
+    if dividends is not None and len(dividends) > 0:
+        last_div_amount = float(dividends.iloc[-1])
+        last_div_date = dividends.index[-1].date()
+
+    ex_div_date = None
+    ex_div_ts = info.get("exDividendDate")
+    if ex_div_ts:
+        try:
+            ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).date()
+        except Exception:
+            ex_div_date = None
+    if ex_div_date is None:
+        ex_div_date = last_div_date
+
+    annual_rate = info.get("dividendRate")
+    if annual_rate is None and last_div_amount is not None:
+        # Odhad pri chýbajúcom údaji - predpoklad štvrťročnej výplaty
+        annual_rate = last_div_amount * 4
+
+    return {
+        "ticker": ticker,
+        "name": name,
+        "currency": currency,
+        "price": float(price),
+        "last_div_amount": last_div_amount,
+        "ex_div_date": ex_div_date,
+        "annual_rate": annual_rate,
+    }
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_stock_data(ticker: str):
+    """Stiahne údaje o akcii (cena, meno, dividendy) cez yfinance. Vráti None pri chybe/neplatnom tickeri."""
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        dividends = t.dividends
+        return _parse_stock_info(ticker, info, dividends)
+    except Exception:
+        return None
+
+
+# --------- Sekcia 1: Pridanie akcie ---------
+st.markdown("#### ➕ Pridať akciu")
+
+with st.form(key="add_stock_form", clear_on_submit=True):
+    c1, c2, c3 = st.columns([3, 2, 1])
+    with c1:
+        ticker_in = st.text_input(
+            "Ticker", placeholder="napr. AAPL", label_visibility="collapsed"
+        )
+    with c2:
+        qty_in = st.number_input(
+            "Množstvo", min_value=1, step=1, value=1, label_visibility="collapsed"
+        )
+    with c3:
+        submitted = st.form_submit_button("Pridať", use_container_width=True)
+
+if submitted:
+    ticker_clean = ticker_in.strip().upper()
+    if not ticker_clean:
+        st.warning("Zadaj ticker akcie.")
+    else:
+        new_data = fetch_stock_data(ticker_clean)
+        if new_data is None:
+            st.error(f"Ticker „{ticker_clean}“ sa nepodarilo nájsť.")
+        else:
+            st.session_state.holdings[ticker_clean] = (
+                st.session_state.holdings.get(ticker_clean, 0) + qty_in
+            )
+            st.success(f"Pridané: {qty_in} ks {ticker_clean} ({new_data['name']})")
+
+# Načítanie dát pre všetky držané akcie (zdieľané pre sekciu 2 aj 3)
+stock_records = {}
+for _tkr in st.session_state.holdings:
+    _rec = fetch_stock_data(_tkr)
+    if _rec is not None:
+        stock_records[_tkr] = _rec
+
+
+# --------- Sekcia 2: Moje akcie (editovateľná tabuľka) ---------
+st.markdown("#### 💼 Moje akcie")
+
+if not st.session_state.holdings:
+    st.info("Zatiaľ nemáš pridané žiadne akcie. Pridaj prvú vyššie.")
+else:
+    holdings_rows = []
+    for tkr, qty in st.session_state.holdings.items():
+        rec = stock_records.get(tkr)
+        if rec is None:
+            price_str = "N/A"
+            name = tkr
+        else:
+            price_str = f"{rec['price']:.2f} {rec['currency']}".strip()
+            name = rec["name"]
+        holdings_rows.append(
+            {
+                "Ticker": tkr,
+                "Meno firmy": name,
+                "Aktuálna cena": price_str,
+                "Množstvo": qty,
+            }
+        )
+
+    holdings_df = pd.DataFrame(holdings_rows)
+
+    edited_df = st.data_editor(
+        holdings_df,
+        column_config={
+            "Ticker": st.column_config.TextColumn(disabled=True),
+            "Meno firmy": st.column_config.TextColumn(disabled=True),
+            "Aktuálna cena": st.column_config.TextColumn(disabled=True),
+            "Množstvo": st.column_config.NumberColumn(
+                min_value=0, step=1, format="%.0f ks"
+            ),
+        },
+        hide_index=True,
+        use_container_width=True,
+        key="holdings_editor",
+    )
+
+    for _, row in edited_df.iterrows():
+        st.session_state.holdings[row["Ticker"]] = int(row["Množstvo"])
+
+
+# --------- Sekcia 3: Najbližšie Ex-Div dátumy ---------
+st.markdown("#### 📅 Najbližšie Ex-Div dátumy")
+
+if not st.session_state.holdings:
+    st.info("Pridaj akcie vyššie, aby sa tu zobrazil prehľad dividend.")
+else:
+    today = datetime.now(timezone.utc).date()
+    div_rows = []
+    for tkr, qty in st.session_state.holdings.items():
+        rec = stock_records.get(tkr)
+        if rec is None or rec["ex_div_date"] is None:
+            continue
+
+        price = rec["price"]
+        last_div = rec["last_div_amount"]
+        annual_rate = rec["annual_rate"]
+        currency = rec["currency"]
+
+        pct_last = (last_div / price * 100) if (last_div is not None and price) else None
+        pct_annual = (annual_rate / price * 100) if (annual_rate is not None and price) else None
+        expected = (last_div * qty) if last_div is not None else None
+
+        div_rows.append(
+            {
+                "ticker": tkr,
+                "name": rec["name"],
+                "qty": qty,
+                "ex_date": rec["ex_div_date"],
+                "last_div": last_div,
+                "pct_last": pct_last,
+                "pct_annual": pct_annual,
+                "expected": expected,
+                "currency": currency,
+            }
+        )
+
+    if not div_rows:
+        st.info("Pre pridané akcie sa nenašli žiadne dividendové údaje.")
+    else:
+        def _div_sort_key(r):
+            d = r["ex_date"]
+            return (1, d) if d < today else (0, d)
+
+        div_rows.sort(key=_div_sort_key)
+
+        div_row_parts = []
+        for r in div_rows:
+            last_div_str = (
+                f"{r['last_div']:.2f} {r['currency']}".strip()
+                if r["last_div"] is not None else "N/A"
+            )
+            pct_last_str = f"{r['pct_last']:.2f} %" if r["pct_last"] is not None else "N/A"
+            pct_annual_str = f"{r['pct_annual']:.2f} %" if r["pct_annual"] is not None else "N/A"
+            expected_str = (
+                f"{r['expected']:.2f} {r['currency']}".strip()
+                if r["expected"] is not None else "N/A"
+            )
+            date_str = r["ex_date"].strftime("%d/%m/%y")
+
+            div_row_parts.append(
+                '<tr>'
+                f'<td class="code-cell">{r["ticker"]}</td>'
+                f'<td>{r["name"]}</td>'
+                f'<td>{r["qty"]} ks</td>'
+                f'<td>{date_str}</td>'
+                f'<td>{last_div_str}</td>'
+                f'<td>{pct_last_str}</td>'
+                f'<td>{pct_annual_str}</td>'
+                f'<td>{expected_str}</td>'
+                '</tr>'
+            )
+
+        div_table_html = (
+            '<div class="board-wrap"><table class="board">'
+            '<thead><tr>'
+            '<th>Ticker</th><th>Meno</th><th>Množstvo</th><th>Ex-Div Date</th>'
+            '<th>Dividenda/akcia</th><th>% k cene</th><th>% ročne</th><th>Očak. výnos</th>'
+            '</tr></thead>'
+            f'<tbody>{"".join(div_row_parts)}</tbody>'
+            '</table></div>'
+        )
+
+        st.markdown(div_table_html, unsafe_allow_html=True)
