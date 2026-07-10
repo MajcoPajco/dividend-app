@@ -86,21 +86,15 @@ def format_delta(delta: timedelta) -> str:
 
 # --------------------------- UI ---------------------------
 
-st.title("📈 Prehľad svetových búrz")
+# Zmenšenie horného odsadenia stránky, aby bola tabuľka čo najvyššie
+st.markdown(
+    "<style>.block-container{padding-top:1.2rem;} h3{margin-bottom:0.4rem;}</style>",
+    unsafe_allow_html=True,
+)
+
+st.markdown("### 📊 Dividend tracker")
 
 now_utc = datetime.now(ZoneInfo("UTC"))
-now_bratislava = now_utc.astimezone(BRATISLAVA_TZ)
-
-st.markdown(
-    f"##### 🇸🇰 Aktuálny čas v Bratislave: **{now_bratislava.strftime('%H:%M:%S')}** "
-    f"({now_bratislava.strftime('%d.%m.%Y')})"
-)
-
-st.caption(
-    "Údaje sa aktualizujú automaticky každú minútu. 🟢 Zelenou farbou sú burzy, ktoré sú práve otvorené "
-    "(zobrazuje sa, ako dlho už obchodovanie prebieha). 🔴 Červenou farbou sú zatvorené burzy "
-    "(zobrazuje sa čas zostávajúci do otvorenia)."
-)
 
 # POZNÁMKA: Streamlit Markdown si riadky odsadené 4+ medzerami môže pomýliť
 # s blokom kódu a HTML potom zobrazí ako čistý text. Preto sa celé HTML
@@ -158,9 +152,3 @@ table_html = (
 )
 
 st.markdown(table_html, unsafe_allow_html=True)
-
-st.markdown("---")
-st.caption(
-    "⚠️ Poznámka: aplikácia nezohľadňuje štátne sviatky ani obedné prestávky niektorých ázijských búrz "
-    "(napr. Tokio, Hongkong, Šanghaj). Časy otvorenia/zatvorenia sú orientačné podľa bežného obchodného kalendára."
-)
