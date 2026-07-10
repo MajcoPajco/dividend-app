@@ -188,8 +188,8 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
             ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).date()
         except Exception:
             ex_div_date = None
-    if ex_div_date is None:
-        ex_div_date = last_div_date
+    # POZOR: zámerne sa tu nerobí fallback na posledný historický dátum dividendy.
+    # Sekcia 3 má zobrazovať iba oficiálne oznámený (Yahoo Finance) Ex-Div dátum.
 
     annual_rate = info.get("dividendRate")
     if annual_rate is None and last_div_amount is not None:
@@ -230,7 +230,13 @@ with st.form(key="add_stock_form", clear_on_submit=True):
         )
     with c2:
         qty_in = st.number_input(
-            "Množstvo", min_value=1, step=1, value=1, label_visibility="collapsed"
+            "Množstvo",
+            min_value=0.0001,
+            step=0.0001,
+            value=None,
+            format="%.4f",
+            placeholder="Množstvo",
+            label_visibility="collapsed",
         )
     with c3:
         submitted = st.form_submit_button("Pridať", use_container_width=True)
@@ -239,6 +245,8 @@ if submitted:
     ticker_clean = ticker_in.strip().upper()
     if not ticker_clean:
         st.warning("Zadaj ticker akcie.")
+    elif not qty_in or qty_in <= 0:
+        st.warning("Zadaj množstvo väčšie ako 0.")
     else:
         new_data = fetch_stock_data(ticker_clean)
         if new_data is None:
@@ -290,7 +298,7 @@ else:
             "Meno firmy": st.column_config.TextColumn(disabled=True),
             "Aktuálna cena": st.column_config.TextColumn(disabled=True),
             "Množstvo": st.column_config.NumberColumn(
-                min_value=0, step=1, format="%.0f ks"
+                min_value=0.0, step=0.0001, format="%.4f"
             ),
         },
         hide_index=True,
@@ -299,7 +307,7 @@ else:
     )
 
     for _, row in edited_df.iterrows():
-        st.session_state.holdings[row["Ticker"]] = int(row["Množstvo"])
+        st.session_state.holdings[row["Ticker"]] = float(row["Množstvo"])
 
 
 # --------- Sekcia 3: Najbližšie Ex-Div dátumy ---------
@@ -313,6 +321,9 @@ else:
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
         if rec is None or rec["ex_div_date"] is None:
+            continue
+        # Zobrazujeme len akcie s oficiálne oznámeným Ex-Div dátumom, ktorý je dnes alebo v budúcnosti.
+        if rec["ex_div_date"] < today:
             continue
 
         price = rec["price"]
@@ -339,13 +350,14 @@ else:
         )
 
     if not div_rows:
-        st.info("Pre pridané akcie sa nenašli žiadne dividendové údaje.")
+        st.info("Žiadna z pridaných akcií nemá aktuálne oficiálne oznámený budúci Ex-Div dátum.")
     else:
-        def _div_sort_key(r):
-            d = r["ex_date"]
-            return (1, d) if d < today else (0, d)
+        div_rows.sort(key=lambda r: r["ex_date"])
 
-        div_rows.sort(key=_div_sort_key)
+        def format_qty(q: float) -> str:
+            """Zobrazí množstvo bez zbytočných nulových desatinných miest (max. 4)."""
+            s = f"{q:.4f}".rstrip("0").rstrip(".")
+            return s if s else "0"
 
         div_row_parts = []
         for r in div_rows:
@@ -365,7 +377,7 @@ else:
                 '<tr>'
                 f'<td class="code-cell">{r["ticker"]}</td>'
                 f'<td>{r["name"]}</td>'
-                f'<td>{r["qty"]} ks</td>'
+                f'<td>{format_qty(r["qty"])} ks</td>'
                 f'<td>{date_str}</td>'
                 f'<td>{last_div_str}</td>'
                 f'<td>{pct_last_str}</td>'
