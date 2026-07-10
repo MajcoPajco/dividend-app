@@ -2,4 +2,4 @@ streamlit
 streamlit-autorefresh
 tzdata
 pandas
-yfinance
+yfinance>=0.2.40
