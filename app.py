@@ -102,80 +102,54 @@ st.caption(
     "(zobrazuje sa čas zostávajúci do otvorenia)."
 )
 
-st.markdown(
-    """
-    <style>
-    .exchange-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 14.5px;
-    }
-    .exchange-table th {
-        text-align: left;
-        padding: 6px 12px;
-        border-bottom: 2px solid rgba(128, 128, 128, 0.35);
-        opacity: 0.65;
-        font-weight: 600;
-        font-size: 12.5px;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-    }
-    .exchange-table td {
-        padding: 7px 12px;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.15);
-        white-space: nowrap;
-    }
-    .row-open td { color: #22c55e; font-weight: 600; }
-    .row-closed td { color: #ef4444; font-weight: 600; }
-    .status-badge { font-weight: 700; }
-    </style>
-    """,
-    unsafe_allow_html=True,
+# POZNÁMKA: Streamlit Markdown si riadky odsadené 4+ medzerami môže pomýliť
+# s blokom kódu a HTML potom zobrazí ako čistý text. Preto sa celé HTML
+# skladá bez odsadenia (na jeden "riadok" na tag), nikdy ako viacriadkový
+# odsadený reťazec.
+BOARD_CSS = (
+    "<style>"
+    ".board-wrap{background:#0b0f14;border-radius:10px;padding:6px 0;border:1px solid #1e2530;}"
+    ".board{width:100%;border-collapse:collapse;font-family:'Courier New',Consolas,monospace;}"
+    ".board th{text-align:left;padding:8px 18px;font-size:12px;letter-spacing:0.12em;"
+    "color:#5b6674;text-transform:uppercase;border-bottom:1px solid #1e2530;}"
+    ".board td{padding:9px 18px;font-size:16px;letter-spacing:0.05em;white-space:nowrap;}"
+    ".row-open td{color:#2ee66b;text-shadow:0 0 6px rgba(46,230,107,0.35);}"
+    ".row-closed td{color:#ff4d4d;text-shadow:0 0 6px rgba(255,77,77,0.25);}"
+    ".board tr{border-bottom:1px solid #161b22;}"
+    ".code-cell{font-weight:700;}"
+    "</style>"
 )
+st.markdown(BOARD_CSS, unsafe_allow_html=True)
 
 results = [(ex, get_status(ex, now_utc)) for ex in EXCHANGES]
 
 # Zoradenie: otvorené burzy hore, potom podľa najbližšieho času do otvorenia
 results.sort(key=lambda item: (not item[1]["is_open"], item[1]["delta"]))
 
-rows_html = ""
+row_parts = []
 for ex, status in results:
     local_time_str = status["local_time"].strftime("%H:%M")
     row_class = "row-open" if status["is_open"] else "row-closed"
 
     if status["is_open"]:
-        stav = "🟢 Otvorené"
-        info = f"už {format_delta(status['delta'])}"
+        stav = f"● OTVORENÉ — {format_delta(status['delta']).upper()}"
     else:
-        stav = "🔴 Zatvorené"
-        info = f"otvára o {format_delta(status['delta'])}"
+        stav = f"● ZATVORENÉ — O {format_delta(status['delta']).upper()}"
 
-    rows_html += f"""
-        <tr class="{row_class}">
-            <td>{ex['flag']} {ex['name']} ({ex['code']})</td>
-            <td>{ex['city']}</td>
-            <td>{local_time_str}</td>
-            <td class="status-badge">{stav}</td>
-            <td>{info}</td>
-        </tr>
-    """
+    row_parts.append(
+        f'<tr class="{row_class}">'
+        f'<td class="code-cell">{ex["flag"]} {ex["code"]}</td>'
+        f'<td>{local_time_str}</td>'
+        f'<td>{stav}</td>'
+        f'</tr>'
+    )
 
-table_html = f"""
-<table class="exchange-table">
-    <thead>
-        <tr>
-            <th>Burza</th>
-            <th>Mesto</th>
-            <th>Miestny čas</th>
-            <th>Stav</th>
-            <th>Info</th>
-        </tr>
-    </thead>
-    <tbody>
-        {rows_html}
-    </tbody>
-</table>
-"""
+table_html = (
+    '<div class="board-wrap"><table class="board">'
+    '<thead><tr><th>Burza</th><th>Miestny čas</th><th>Stav</th></tr></thead>'
+    f'<tbody>{"".join(row_parts)}</tbody>'
+    '</table></div>'
+)
 
 st.markdown(table_html, unsafe_allow_html=True)
 
