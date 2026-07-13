@@ -31,44 +31,44 @@ EXCHANGES = [
      "tz": "America/New_York", "open": "09:30", "close": "16:00", "flag": "🇺🇸"},
     {"name": "Toronto Stock Exchange", "code": "TSX", "city": "Toronto", "country": "Kanada",
      "tz": "America/Toronto", "open": "09:30", "close": "16:00", "flag": "🇨🇦"},
-    {"name": "London Stock Exchange", "code": "LSE", "city": "Londýn", "country": "Spojené kráľovstvo",
+    {"name": "London Stock Exchange", "code": "LSE", "city": "Londyn", "country": "Spojene kralovstvo",
      "tz": "Europe/London", "open": "08:00", "close": "16:30", "flag": "🇬🇧"},
-    {"name": "Euronext Paris", "code": "EPA", "city": "Paríž", "country": "Francúzsko",
+    {"name": "Euronext Paris", "code": "EPA", "city": "Pariz", "country": "Francuzsko",
      "tz": "Europe/Paris", "open": "09:00", "close": "17:30", "flag": "🇫🇷"},
-    {"name": "Deutsche Börse (Xetra)", "code": "FRA", "city": "Frankfurt", "country": "Nemecko",
+    {"name": "Deutsche Boerse (Xetra)", "code": "FRA", "city": "Frankfurt", "country": "Nemecko",
      "tz": "Europe/Berlin", "open": "09:00", "close": "17:30", "flag": "🇩🇪"},
-    {"name": "SIX Swiss Exchange", "code": "SIX", "city": "Zürich", "country": "Švajčiarsko",
+    {"name": "SIX Swiss Exchange", "code": "SIX", "city": "Zurich", "country": "Svajciarsko",
      "tz": "Europe/Zurich", "open": "09:00", "close": "17:30", "flag": "🇨🇭"},
     {"name": "Tokyo Stock Exchange", "code": "TSE", "city": "Tokio", "country": "Japonsko",
      "tz": "Asia/Tokyo", "open": "09:00", "close": "15:00", "flag": "🇯🇵"},
-    {"name": "Hong Kong Stock Exchange", "code": "HKEX", "city": "Hongkong", "country": "Čína",
+    {"name": "Hong Kong Stock Exchange", "code": "HKEX", "city": "Hongkong", "country": "Cina",
      "tz": "Asia/Hong_Kong", "open": "09:30", "close": "16:00", "flag": "🇭🇰"},
-    {"name": "Shanghai Stock Exchange", "code": "SSE", "city": "Šanghaj", "country": "Čína",
+    {"name": "Shanghai Stock Exchange", "code": "SSE", "city": "Sanghaj", "country": "Cina",
      "tz": "Asia/Shanghai", "open": "09:30", "close": "15:00", "flag": "🇨🇳"},
     {"name": "Bombay Stock Exchange", "code": "BSE", "city": "Bombaj", "country": "India",
      "tz": "Asia/Kolkata", "open": "09:15", "close": "15:30", "flag": "🇮🇳"},
-    {"name": "Australian Securities Exchange", "code": "ASX", "city": "Sydney", "country": "Austrália",
+    {"name": "Australian Securities Exchange", "code": "ASX", "city": "Sydney", "country": "Australia",
      "tz": "Australia/Sydney", "open": "10:00", "close": "16:00", "flag": "🇦🇺"},
 ]
 
 EXTRA_MARKETS_BY_CODE = {
-    "OSL": {"name": "Oslo Børs", "code": "OSL", "city": "Oslo", "country": "Nórsko",
+    "OSL": {"name": "Oslo Bors", "code": "OSL", "city": "Oslo", "country": "Norsko",
             "tz": "Europe/Oslo", "open": "09:00", "close": "16:25", "flag": "🇳🇴"},
-    "STO": {"name": "Nasdaq Stockholm", "code": "STO", "city": "Štokholm", "country": "Švédsko",
+    "STO": {"name": "Nasdaq Stockholm", "code": "STO", "city": "Stokholm", "country": "Svedsko",
             "tz": "Europe/Stockholm", "open": "09:00", "close": "17:25", "flag": "🇸🇪"},
-    "HEL": {"name": "Nasdaq Helsinki", "code": "HEL", "city": "Helsinki", "country": "Fínsko",
+    "HEL": {"name": "Nasdaq Helsinki", "code": "HEL", "city": "Helsinki", "country": "Finsko",
             "tz": "Europe/Helsinki", "open": "10:00", "close": "18:30", "flag": "🇫🇮"},
-    "CPH": {"name": "Nasdaq Copenhagen", "code": "CPH", "city": "Kodaň", "country": "Dánsko",
+    "CPH": {"name": "Nasdaq Copenhagen", "code": "CPH", "city": "Kodan", "country": "Dansko",
             "tz": "Europe/Copenhagen", "open": "09:00", "close": "17:00", "flag": "🇩🇰"},
-    "MIL": {"name": "Borsa Italiana", "code": "MIL", "city": "Miláno", "country": "Taliansko",
+    "MIL": {"name": "Borsa Italiana", "code": "MIL", "city": "Milano", "country": "Taliansko",
             "tz": "Europe/Rome", "open": "09:00", "close": "17:30", "flag": "🇮🇹"},
-    "MCE": {"name": "Bolsa de Madrid", "code": "MCE", "city": "Madrid", "country": "Španielsko",
+    "MCE": {"name": "Bolsa de Madrid", "code": "MCE", "city": "Madrid", "country": "Spanielsko",
             "tz": "Europe/Madrid", "open": "09:00", "close": "17:30", "flag": "🇪🇸"},
-    "VIE": {"name": "Wiener Börse", "code": "VIE", "city": "Viedeň", "country": "Rakúsko",
+    "VIE": {"name": "Wiener Boerse", "code": "VIE", "city": "Vieden", "country": "Rakusko",
             "tz": "Europe/Vienna", "open": "09:00", "close": "17:30", "flag": "🇦🇹"},
-    "WSE": {"name": "Warsaw Stock Exchange", "code": "WSE", "city": "Varšava", "country": "Poľsko",
+    "WSE": {"name": "Warsaw Stock Exchange", "code": "WSE", "city": "Varsava", "country": "Polsko",
             "tz": "Europe/Warsaw", "open": "09:00", "close": "17:50", "flag": "🇵🇱"},
-    "PRA": {"name": "Prague Stock Exchange", "code": "PRA", "city": "Praha", "country": "Česko",
+    "PRA": {"name": "Prague Stock Exchange", "code": "PRA", "city": "Praha", "country": "Cesko",
             "tz": "Europe/Prague", "open": "09:00", "close": "16:20", "flag": "🇨🇿"},
     "AMS": {"name": "Euronext Amsterdam", "code": "AMS", "city": "Amsterdam", "country": "Holandsko",
             "tz": "Europe/Amsterdam", "open": "09:00", "close": "17:30", "flag": "🇳🇱"},
@@ -83,28 +83,28 @@ EXCHANGE_INFO = {
     "NYQ": ("NYSE", "USA"), "ASE": ("NYSE American", "USA"), "PCX": ("NYSE Arca", "USA"),
     "BATS": ("Cboe BZX", "USA"), "PNK": ("OTC Pink", "USA"),
     "TOR": ("Toronto Stock Exchange", "Kanada"), "VAN": ("TSX Venture Exchange", "Kanada"),
-    "LSE": ("London Stock Exchange", "Spojené kráľovstvo"),
-    "IOB": ("London Stock Exchange (IOB)", "Spojené kráľovstvo"),
-    "PAR": ("Euronext Paris", "Francúzsko"), "AMS": ("Euronext Amsterdam", "Holandsko"),
+    "LSE": ("London Stock Exchange", "Spojene kralovstvo"),
+    "IOB": ("London Stock Exchange (IOB)", "Spojene kralovstvo"),
+    "PAR": ("Euronext Paris", "Francuzsko"), "AMS": ("Euronext Amsterdam", "Holandsko"),
     "BRU": ("Euronext Brussels", "Belgicko"), "LIS": ("Euronext Lisbon", "Portugalsko"),
-    "GER": ("Deutsche Börse (Xetra)", "Nemecko"), "FRA": ("Frankfurt Stock Exchange", "Nemecko"),
-    "BER": ("Berlin Stock Exchange", "Nemecko"), "SWX": ("SIX Swiss Exchange", "Švajčiarsko"),
-    "EBS": ("SIX Swiss Exchange", "Švajčiarsko"), "MIL": ("Borsa Italiana", "Taliansko"),
-    "MCE": ("Bolsa de Madrid", "Španielsko"), "STO": ("Nasdaq Stockholm", "Švédsko"),
-    "CPH": ("Nasdaq Copenhagen", "Dánsko"), "HEL": ("Nasdaq Helsinki", "Fínsko"),
-    "OSL": ("Oslo Børs", "Nórsko"), "VIE": ("Wiener Börse", "Rakúsko"),
-    "WSE": ("Warsaw Stock Exchange", "Poľsko"), "PRA": ("Prague Stock Exchange", "Česko"),
+    "GER": ("Deutsche Boerse (Xetra)", "Nemecko"), "FRA": ("Frankfurt Stock Exchange", "Nemecko"),
+    "BER": ("Berlin Stock Exchange", "Nemecko"), "SWX": ("SIX Swiss Exchange", "Svajciarsko"),
+    "EBS": ("SIX Swiss Exchange", "Svajciarsko"), "MIL": ("Borsa Italiana", "Taliansko"),
+    "MCE": ("Bolsa de Madrid", "Spanielsko"), "STO": ("Nasdaq Stockholm", "Svedsko"),
+    "CPH": ("Nasdaq Copenhagen", "Dansko"), "HEL": ("Nasdaq Helsinki", "Finsko"),
+    "OSL": ("Oslo Bors", "Norsko"), "VIE": ("Wiener Boerse", "Rakusko"),
+    "WSE": ("Warsaw Stock Exchange", "Polsko"), "PRA": ("Prague Stock Exchange", "Cesko"),
     "JPX": ("Tokyo Stock Exchange", "Japonsko"), "TYO": ("Tokyo Stock Exchange", "Japonsko"),
-    "HKG": ("Hong Kong Stock Exchange", "Čína"), "SHH": ("Shanghai Stock Exchange", "Čína"),
-    "SHZ": ("Shenzhen Stock Exchange", "Čína"),
+    "HKG": ("Hong Kong Stock Exchange", "Cina"), "SHH": ("Shanghai Stock Exchange", "Cina"),
+    "SHZ": ("Shenzhen Stock Exchange", "Cina"),
     "NSI": ("National Stock Exchange of India", "India"),
     "BSE": ("Bombay Stock Exchange", "India"),
-    "ASX": ("Australian Securities Exchange", "Austrália"),
-    "SAO": ("B3 (Brazília)", "Brazília"), "MEX": ("Bolsa Mexicana de Valores", "Mexiko"),
-    "JNB": ("Johannesburg Stock Exchange", "Južná Afrika"),
+    "ASX": ("Australian Securities Exchange", "Australia"),
+    "SAO": ("B3 (Brazilia)", "Brazilia"), "MEX": ("Bolsa Mexicana de Valores", "Mexiko"),
+    "JNB": ("Johannesburg Stock Exchange", "Juzna Afrika"),
     "TLV": ("Tel Aviv Stock Exchange", "Izrael"), "SES": ("Singapore Exchange", "Singapur"),
-    "KSC": ("Korea Exchange (KOSPI)", "Južná Kórea"),
-    "KOE": ("Korea Exchange (KOSDAQ)", "Južná Kórea"),
+    "KSC": ("Korea Exchange (KOSPI)", "Juzna Korea"),
+    "KOE": ("Korea Exchange (KOSDAQ)", "Juzna Korea"),
 }
 
 
@@ -173,26 +173,15 @@ def format_delta(delta: timedelta) -> str:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_fx_to_usd_rate(currency: str | None) -> float | None:
-    """
-    Vráti kurz: 1 jednotka currency = X USD.
-    Špeciálny prípad: GBp (britské pence) = GBP × 0.01
-    Primárny zdroj: frankfurter.app (zadarmo, bez API kľúča)
-    Záložný zdroj: Yahoo Finance FX ticker
-    """
     if not currency:
         return None
-
-    # GBp = britské pence (Yahoo Finance používa 'GBp'), 1 GBp = 0.01 GBP
     pence_factor = 1.0
     curr_norm = currency
     if currency == "GBp":
         curr_norm = "GBP"
         pence_factor = 0.01
-
     if curr_norm.upper() == "USD":
         return 1.0
-
-    # --- Primárny zdroj: frankfurter.app ---
     try:
         resp = requests.get(
             "https://api.frankfurter.app/latest",
@@ -206,8 +195,6 @@ def get_fx_to_usd_rate(currency: str | None) -> float | None:
                 return float(rate) * pence_factor
     except Exception:
         pass
-
-    # --- Záložný zdroj: Yahoo Finance FX ticker ---
     try:
         t = yf.Ticker(f"{curr_norm.upper()}USD=X")
         info = t.info or {}
@@ -216,7 +203,6 @@ def get_fx_to_usd_rate(currency: str | None) -> float | None:
             return float(rate) * pence_factor
     except Exception:
         pass
-
     return None
 
 
@@ -232,13 +218,13 @@ def estimate_dividend_frequency(dividends) -> str:
         return "N/A"
     avg_gap = sum(gaps_days) / len(gaps_days)
     if avg_gap <= 45:
-        return "Mesačne"
+        return "Mesacne"
     elif avg_gap <= 135:
-        return "Štvrťročne"
+        return "Stvrtrocne"
     elif avg_gap <= 250:
-        return "Polročne"
+        return "Polrocne"
     elif avg_gap <= 450:
-        return "Ročne"
+        return "Rocne"
     else:
         return "Nepravidelne"
 
@@ -291,7 +277,7 @@ def fetch_stock_data(ticker: str):
         return None
 
 
-# ── UI setup ──────────────────────────────────────────────────────────────────
+# ── UI ────────────────────────────────────────────────────────────────────────
 
 st.markdown(
     "<style>.block-container{padding-top:1.2rem;} h3{margin-bottom:0.4rem;}</style>",
@@ -328,7 +314,7 @@ if "holdings" not in st.session_state:
 if "holdings_exchange" not in st.session_state:
     st.session_state.holdings_exchange = {}
 
-# ── Načítanie dát akcií (pred akýmkoľvek vykreslením) ────────────────────────
+# ── Nacitanie dat akcii ───────────────────────────────────────────────────────
 
 stock_records: dict = {}
 for _tkr in list(st.session_state.holdings):
@@ -338,7 +324,7 @@ for _tkr in list(st.session_state.holdings):
         st.session_state.holdings_exchange[_tkr] = _rec["exchange"]
 
 # ============================================================
-# SEKCIA 1 — PREHĽAD BÚRZ (najvyššie)
+# SEKCIA 1 - PREHLAD BURZ
 # ============================================================
 
 existing_cities = {ex["city"] for ex in EXCHANGES}
@@ -360,31 +346,33 @@ for ex, status in results:
     local_time_str = status["local_time"].strftime("%H:%M")
     row_class = "row-open" if status["is_open"] else "row-closed"
     stav = (
-        f"● OTVORENÉ — {format_delta(status['delta']).upper()}"
+        f"OTVORENE &mdash; {format_delta(status['delta']).upper()}"
         if status["is_open"]
-        else f"● ZATVORENÉ — O {format_delta(status['delta']).upper()}"
+        else f"ZATVORENE &mdash; O {format_delta(status['delta']).upper()}"
     )
+    bullet = "●"
     row_parts.append(
         f'<tr class="{row_class}">'
         f'<td class="code-cell">{ex["flag"]} {ex["code"]}</td>'
         f'<td>{ex["city"]}</td><td>{ex["country"]}</td>'
-        f'<td>{local_time_str}</td><td>{stav}</td>'
+        f'<td>{local_time_str}</td>'
+        f'<td>{bullet} {stav}</td>'
         f'</tr>'
     )
 
 st.markdown(
     '<div class="board-wrap"><table class="board">'
-    '<thead><tr><th>Burza</th><th>Mesto</th><th>Štát</th>'
-    '<th>Miestny čas</th><th>Stav</th></tr></thead>'
+    '<thead><tr><th>Burza</th><th>Mesto</th><th>Stat</th>'
+    '<th>Miestny cas</th><th>Stav</th></tr></thead>'
     f'<tbody>{"".join(row_parts)}</tbody></table></div>',
     unsafe_allow_html=True,
 )
 
 # ============================================================
-# SEKCIA 2 — PRIDAŤ AKCIU
+# SEKCIA 2 - PRIDAT AKCIU
 # ============================================================
 
-st.markdown("#### ➕ Pridať akciu")
+st.markdown("#### ➕ Pridat akciu")
 
 with st.form(key="add_stock_form", clear_on_submit=True):
     c1, c2, c3 = st.columns([3, 2, 1])
@@ -392,35 +380,35 @@ with st.form(key="add_stock_form", clear_on_submit=True):
         ticker_in = st.text_input("Ticker", placeholder="napr. AAPL", label_visibility="collapsed")
     with c2:
         qty_in = st.number_input(
-            "Množstvo", step=0.0001, value=None, format="%.4f",
-            placeholder="Množstvo", label_visibility="collapsed",
+            "Mnozstvo", step=0.0001, value=None, format="%.4f",
+            placeholder="Mnozstvo", label_visibility="collapsed",
         )
     with c3:
-        submitted = st.form_submit_button("Pridať", use_container_width=True)
+        submitted = st.form_submit_button("Pridat", use_container_width=True)
 
-st.caption("💡 Kladné množstvo = nákup (pridanie). Záporné množstvo = predaj (odpočet z portfólia).")
+st.caption("Kladne mnozstvo = nakup (pridanie). Zaporne mnozstvo = predaj (odpocet z portfolia).")
 
 if submitted:
     ticker_clean = ticker_in.strip().upper()
     if not ticker_clean:
         st.warning("Zadaj ticker akcie.")
     elif qty_in is None or qty_in == 0:
-        st.warning("Zadaj množstvo rôzne od 0.")
+        st.warning("Zadaj mnozstvo rozne od 0.")
     elif qty_in > 0:
         new_data = fetch_stock_data(ticker_clean)
         if new_data is None:
-            st.error(f"Ticker „{ticker_clean}" sa nepodarilo nájsť.")
+            st.error(f'Ticker "{ticker_clean}" sa nepodarilo najst.')
         else:
             st.session_state.holdings[ticker_clean] = (
                 st.session_state.holdings.get(ticker_clean, 0) + qty_in
             )
             st.session_state.holdings_exchange[ticker_clean] = new_data.get("exchange", "")
             save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
-            st.success(f"Pridané: {format_qty(qty_in)} ks {ticker_clean} ({new_data['name']})")
+            st.success(f'Pridane: {format_qty(qty_in)} ks {ticker_clean} ({new_data["name"]})')
     else:
         current_qty = st.session_state.holdings.get(ticker_clean, 0)
         if current_qty <= 0:
-            st.info(f"Akcia „{ticker_clean}" nie je momentálne vlastnená, nie je čo odobrať.")
+            st.info(f'Akcia "{ticker_clean}" nie je momentalne vlastnena, nie je co odobrat.')
         else:
             remove_qty = abs(qty_in)
             new_qty = current_qty - remove_qty
@@ -428,26 +416,26 @@ if submitted:
                 del st.session_state.holdings[ticker_clean]
                 st.session_state.holdings_exchange.pop(ticker_clean, None)
                 extra_note = (
-                    " (odobraté bolo viac, než si vlastnil, pozícia bola vynulovaná)"
+                    " (odobrate bolo viac, nez si vlastnil, pozicia bola vynulovana)"
                     if remove_qty > current_qty else ""
                 )
-                st.success(f"Odobraté všetkých {format_qty(current_qty)} ks {ticker_clean}.{extra_note}")
+                st.success(f'Odobrate vsetkych {format_qty(current_qty)} ks {ticker_clean}.{extra_note}')
             else:
                 st.session_state.holdings[ticker_clean] = new_qty
                 st.success(
-                    f"Odobraté {format_qty(remove_qty)} ks {ticker_clean}. "
-                    f"Nový stav: {format_qty(new_qty)} ks."
+                    f'Odobrate {format_qty(remove_qty)} ks {ticker_clean}. '
+                    f'Novy stav: {format_qty(new_qty)} ks.'
                 )
             save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
 
 # ============================================================
-# SEKCIA 3 — MOJE AKCIE
+# SEKCIA 3 - MOJE AKCIE
 # ============================================================
 
 st.markdown("#### 💼 Moje akcie")
 
 if not st.session_state.holdings:
-    st.info("Zatiaľ nemáš pridané žiadne akcie. Pridaj prvú vyššie.")
+    st.info("Zatial nemas pridane ziadne akcie. Pridaj prvu vyssie.")
 else:
     holdings_rows = []
     for tkr, qty in st.session_state.holdings.items():
@@ -465,9 +453,13 @@ else:
             div_rocne_str = f"{pct_annual:.2f} %" if pct_annual is not None else "N/A"
 
         holdings_rows.append({
-            "Ticker": tkr, "Meno firmy": name, "Burza": exchange_str,
-            "Štát": country_str, "Aktuálna cena": price_str,
-            "Div.Rocne[%]": div_rocne_str, "Množstvo": format_qty(qty),
+            "Ticker": tkr,
+            "Meno firmy": name,
+            "Burza": exchange_str,
+            "Stat": country_str,
+            "Aktualna cena": price_str,
+            "Div.Rocne[%]": div_rocne_str,
+            "Mnozstvo": format_qty(qty),
         })
 
     holdings_df = pd.DataFrame(holdings_rows)
@@ -477,11 +469,11 @@ else:
             "Ticker": st.column_config.TextColumn(disabled=True),
             "Meno firmy": st.column_config.TextColumn(disabled=True),
             "Burza": st.column_config.TextColumn(disabled=True),
-            "Štát": st.column_config.TextColumn(disabled=True),
-            "Aktuálna cena": st.column_config.TextColumn(disabled=True),
+            "Stat": st.column_config.TextColumn(disabled=True),
+            "Aktualna cena": st.column_config.TextColumn(disabled=True),
             "Div.Rocne[%]": st.column_config.TextColumn(disabled=True),
-            "Množstvo": st.column_config.TextColumn(
-                help="Zadaj množstvo. Desatinnú čiarku môžeš použiť bodkou alebo čiarkou."
+            "Mnozstvo": st.column_config.TextColumn(
+                help="Zadaj mnozstvo. Desatinnu ciarku mozes pouzit bodkou alebo ciarkou."
             ),
         },
         hide_index=True,
@@ -490,7 +482,7 @@ else:
     )
 
     for _, row in edited_df.iterrows():
-        raw = str(row["Množstvo"]).replace(",", ".").strip()
+        raw = str(row["Mnozstvo"]).replace(",", ".").strip()
         try:
             new_qty = float(raw)
         except Exception:
@@ -500,13 +492,13 @@ else:
     save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
 
 # ============================================================
-# SEKCIA 4 — NAJBLIŽŠIE EX-DIV DÁTUMY
+# SEKCIA 4 - NAJBLIZZSIE EX-DIV DATUMY
 # ============================================================
 
-st.markdown("#### 📅 Najbližšie Ex-Div dátumy")
+st.markdown("#### 📅 Najblizzsie Ex-Div datumy")
 
 if not st.session_state.holdings:
-    st.info("Pridaj akcie vyššie, aby sa tu zobrazil prehľad dividend.")
+    st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad dividend.")
 else:
     today = datetime.now(timezone.utc).date()
     div_rows = []
@@ -524,14 +516,20 @@ else:
         pct_annual = (annual_rate / price * 100) if (annual_rate is not None and price) else None
         expected = (last_div * qty) if last_div is not None else None
         div_rows.append({
-            "ticker": tkr, "name": rec["name"], "qty": qty,
-            "ex_date": rec["ex_div_date"], "frequency": rec["frequency"],
-            "last_div": last_div, "pct_last": pct_last,
-            "pct_annual": pct_annual, "expected": expected, "currency": currency,
+            "ticker": tkr,
+            "name": rec["name"],
+            "qty": qty,
+            "ex_date": rec["ex_div_date"],
+            "frequency": rec["frequency"],
+            "last_div": last_div,
+            "pct_last": pct_last,
+            "pct_annual": pct_annual,
+            "expected": expected,
+            "currency": currency,
         })
 
     if not div_rows:
-        st.info("Žiadna z pridaných akcií nemá aktuálne oficiálne oznámený budúci Ex-Div dátum.")
+        st.info("Ziadna z pridanych akcii nema aktualne oficialne oznameny buduci Ex-Div datum.")
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
         div_row_parts = []
@@ -547,12 +545,13 @@ else:
             if r["expected"] is not None:
                 curr = r["currency"]
                 expected_str = f"{r['expected']:.2f} {curr}".strip()
-                # Prepočet na USD pre všetky meny okrem USD (vrátane GBp)
-                if curr and curr.upper() != "USD":
+                # Prepocet na USD pre vsetky meny okrem USD (vratane GBp)
+                is_usd = curr.upper() == "USD" if curr else True
+                if not is_usd:
                     rate = get_fx_to_usd_rate(curr)
                     if rate is not None:
                         usd_amount = r["expected"] * rate
-                        expected_str += f" (≈ USD {usd_amount:.2f})"
+                        expected_str += f" (~ USD {usd_amount:.2f})"
 
             div_row_parts.append(
                 '<tr>'
@@ -570,9 +569,9 @@ else:
 
         st.markdown(
             '<div class="board-wrap"><table class="board"><thead><tr>'
-            '<th>Ticker</th><th>Meno</th><th>Množstvo</th><th>Ex-Div Date</th>'
+            '<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Ex-Div Date</th>'
             '<th>Frekvencia</th><th>Dividenda/akcia</th>'
-            '<th>% k cene</th><th>% ročne</th><th>Očak. výnos</th>'
+            '<th>% k cene</th><th>% rocne</th><th>Ocak. vynos</th>'
             f'</tr></thead><tbody>{"".join(div_row_parts)}</tbody></table></div>',
             unsafe_allow_html=True,
         )
