@@ -8,6 +8,7 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+import requests
 
 # Automatické obnovovanie stránky každú minútu (ak je knižnica dostupná)
 try:
@@ -37,7 +38,7 @@ EXCHANGES = [
     {"name": "Euronext Paris", "code": "EPA", "city": "Paríž", "country": "Francúzsko",
      "tz": "Europe/Paris", "open": "09:00", "close": "17:30", "flag": "🇫🇷"},
     {"name": "Deutsche Börse (Xetra)", "code": "FRA", "city": "Frankfurt", "country": "Nemecko",
-     "tz": "Europe/Berlin", "open": "09:00", "close": "17:30", "flag": "🇩🇪"},
+      "tz": "Europe/Berlin", "open": "09:00", "close": "17:30", "flag": "🇩🇪"},
     {"name": "SIX Swiss Exchange", "code": "SIX", "city": "Zürich", "country": "Švajčiarsko",
      "tz": "Europe/Zurich", "open": "09:00", "close": "17:30", "flag": "🇨🇭"},
     {"name": "Tokyo Stock Exchange", "code": "TSE", "city": "Tokio", "country": "Japonsko",
@@ -52,9 +53,23 @@ EXCHANGES = [
      "tz": "Australia/Sydney", "open": "10:00", "close": "16:00", "flag": "🇦🇺"},
 ]
 
-# Mapovanie burzového kódu (tak, ako ho vracia Yahoo Finance / yfinance v poli "exchange")
-# na čitateľný názov burzy a štát, v ktorom burza sídli. Pokrýva najbežnejšie burzy;
-# ak kód nie je v mape, použije sa "fullExchangeName" z Yahoo Finance ako názov a "N/A" ako štát.
+# Doplnkové burzy podľa kódov (Yahoo exchange code) – pridajú sa dynamicky, ak ich akcie vlastníš
+EXTRA_MARKETS_BY_CODE = {
+    "OSL": {"name": "Oslo Børs", "code": "OSL", "city": "Oslo", "country": "Nórsko", "tz": "Europe/Oslo", "open": "09:00", "close": "16:25", "flag": "🇳🇴"},
+    "STO": {"name": "Nasdaq Stockholm", "code": "STO", "city": "Štokholm", "country": "Švédsko", "tz": "Europe/Stockholm", "open": "09:00", "close": "17:25", "flag": "🇸🇪"},
+    "HEL": {"name": "Nasdaq Helsinki", "code": "HEL", "city": "Helsinki", "country": "Fínsko", "tz": "Europe/Helsinki", "open": "10:00", "close": "18:30", "flag": "🇫🇮"},
+    "CPH": {"name": "Nasdaq Copenhagen", "code": "CPH", "city": "Kodaň", "country": "Dánsko", "tz": "Europe/Copenhagen", "open": "09:00", "close": "17:00", "flag": "🇩🇰"},
+    "MIL": {"name": "Borsa Italiana", "code": "MIL", "city": "Miláno", "country": "Taliansko", "tz": "Europe/Rome", "open": "09:00", "close": "17:30", "flag": "🇮🇹"},
+    "MCE": {"name": "Bolsa de Madrid", "code": "MCE", "city": "Madrid", "country": "Španielsko", "tz": "Europe/Madrid", "open": "09:00", "close": "17:30", "flag": "🇪🇸"},
+    "VIE": {"name": "Wiener Börse", "code": "VIE", "city": "Viedeň", "country": "Rakúsko", "tz": "Europe/Vienna", "open": "09:00", "close": "17:30", "flag": "🇦🇹"},
+    "WSE": {"name": "Warsaw Stock Exchange", "code": "WSE", "city": "Varšava", "country": "Poľsko", "tz": "Europe/Warsaw", "open": "09:00", "close": "17:50", "flag": "🇵🇱"},
+    "PRA": {"name": "Prague Stock Exchange", "code": "PRA", "city": "Praha", "country": "Česko", "tz": "Europe/Prague", "open": "09:00", "close": "16:20", "flag": "🇨🇿"},
+    "AMS": {"name": "Euronext Amsterdam", "code": "AMS", "city": "Amsterdam", "country": "Holandsko", "tz": "Europe/Amsterdam", "open": "09:00", "close": "17:30", "flag": "🇳🇱"},
+    "BRU": {"name": "Euronext Brussels", "code": "BRU", "city": "Brusel", "country": "Belgicko", "tz": "Europe/Brussels", "open": "09:00", "close": "17:30", "flag": "🇧🇪"},
+    "LIS": {"name": "Euronext Lisbon", "code": "LIS", "city": "Lisabon", "country": "Portugalsko", "tz": "Europe/Lisbon", "open": "09:00", "close": "17:30", "flag": "🇵🇹"},
+}
+
+# Mapovanie burzového kódu (Yahoo "exchange") na čitateľný názov a štát
 EXCHANGE_INFO = {
     "NMS": ("NASDAQ", "USA"),
     "NGM": ("NASDAQ", "USA"),
@@ -105,35 +120,21 @@ EXCHANGE_INFO = {
 
 
 def lookup_exchange(exchange_code: str | None, fallback_name: str | None = None) -> tuple[str, str]:
-    """Vráti (názov burzy, štát) na základe burzového kódu z Yahoo Finance.
-
-    Ak kód nepoznáme, použije sa fallback_name (napr. "fullExchangeName" z yfinance)
-    ako názov burzy a štát sa označí ako "N/A".
-    """
     if exchange_code and exchange_code in EXCHANGE_INFO:
         return EXCHANGE_INFO[exchange_code]
     return (fallback_name or exchange_code or "N/A", "N/A")
 
 
 def format_qty(q: float) -> str:
-    """Zobrazí množstvo bez zbytočných nulových desatinných miest (max. 4)."""
     s = f"{q:.4f}".rstrip("0").rstrip(".")
     return s if s else "0"
 
 
 # --------------------------- Perzistencia portfólia ---------------------------
-# Držané akcie sa ukladajú do JSON súboru vedľa app.py, aby sa pri ďalšom
-# spustení aplikácie nemuseli zadávať znova. Ukladá sa Ticker, Burza a Množstvo;
-# ostatné údaje (cena, meno, dividendy...) sa vždy nanovo stiahnu z internetu.
 HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
 
 
 def load_holdings() -> dict:
-    """Načíta uložené portfólio zo súboru (ak existuje).
-
-    Vráti slovník v tvare {ticker: {"qty": float, "exchange": str}}.
-    Pri akomkoľvek probléme (chýbajúci/poškodený súbor) vráti prázdny slovník.
-    """
     if not HOLDINGS_FILE.exists():
         return {}
     try:
@@ -145,7 +146,6 @@ def load_holdings() -> dict:
 
 
 def save_holdings(holdings: dict, exchanges: dict) -> None:
-    """Uloží aktuálne portfólio (ticker, burza, množstvo) do súboru na disku."""
     data = {
         tkr: {"qty": qty, "exchange": exchanges.get(tkr, "")}
         for tkr, qty in holdings.items()
@@ -158,7 +158,6 @@ def save_holdings(holdings: dict, exchanges: dict) -> None:
 
 
 def get_status(exchange: dict, now_utc: datetime) -> dict:
-    """Zistí, či je burza otvorená, a vráti časový rozdiel (do otvorenia / od otvorenia)."""
     tz = ZoneInfo(exchange["tz"])
     now_local = now_utc.astimezone(tz)
 
@@ -168,20 +167,18 @@ def get_status(exchange: dict, now_utc: datetime) -> dict:
     today_open = now_local.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
     today_close = now_local.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
 
-    is_weekday = now_local.weekday() < 5  # pondelok-piatok
+    is_weekday = now_local.weekday() < 5
     is_open = is_weekday and today_open <= now_local < today_close
 
     if is_open:
         delta = now_local - today_open
         return {"is_open": True, "delta": delta, "local_time": now_local}
 
-    # Burza je zatvorená - nájdeme najbližší budúci čas otvorenia
     if is_weekday and now_local < today_open:
         candidate = today_open
     else:
         candidate = today_open + timedelta(days=1)
 
-    # Preskočíme víkend (sobota=5, nedeľa=6)
     while candidate.weekday() >= 5:
         candidate += timedelta(days=1)
 
@@ -195,9 +192,26 @@ def format_delta(delta: timedelta) -> str:
     return f"{hours} h {minutes:02d} min"
 
 
+# ------------- FX konverzia pre USD -------------
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_fx_to_usd_rate(currency: str | None) -> float | None:
+    if not currency or currency.upper() == "USD":
+        return 1.0
+    try:
+        resp = requests.get(
+            "https://api.exchangerate.host/latest",
+            params={"base": currency.upper(), "symbols": "USD"},
+            timeout=10,
+        )
+        data = resp.json()
+        rate = data.get("rates", {}).get("USD")
+        return float(rate) if rate else None
+    except Exception:
+        return None
+
+
 # --------------------------- UI ---------------------------
 
-# Zmenšenie horného odsadenia stránky, aby bola tabuľka čo najvyššie
 st.markdown(
     "<style>.block-container{padding-top:1.2rem;} h3{margin-bottom:0.4rem;}</style>",
     unsafe_allow_html=True,
@@ -207,10 +221,7 @@ st.markdown("### 📊 Dividend tracker")
 
 now_utc = datetime.now(ZoneInfo("UTC"))
 
-# POZNÁMKA: Streamlit Markdown si riadky odsadené 4+ medzerami môže pomýliť
-# s blokom kódu a HTML potom zobrazí ako čistý text. Preto sa celé HTML
-# skladá bez odsadenia (na jeden "riadok" na tag), nikdy ako viacriadkový
-# odsadený reťazec.
+# CSS pre tabuľky (štýl "board")
 BOARD_CSS = (
     "<style>"
     ".board-wrap{background:#ffffff;border-radius:10px;padding:0;border:1px solid #e3e6ea;"
@@ -230,45 +241,12 @@ BOARD_CSS = (
 )
 st.markdown(BOARD_CSS, unsafe_allow_html=True)
 
-results = [(ex, get_status(ex, now_utc)) for ex in EXCHANGES]
-
-# Zoradenie: otvorené burzy hore, potom podľa najbližšieho času do otvorenia
-results.sort(key=lambda item: (not item[1]["is_open"], item[1]["delta"]))
-
-row_parts = []
-for ex, status in results:
-    local_time_str = status["local_time"].strftime("%H:%M")
-    row_class = "row-open" if status["is_open"] else "row-closed"
-
-    if status["is_open"]:
-        stav = f"● OTVORENÉ — {format_delta(status['delta']).upper()}"
-    else:
-        stav = f"● ZATVORENÉ — O {format_delta(status['delta']).upper()}"
-
-    row_parts.append(
-        f'<tr class="{row_class}">'
-        f'<td class="code-cell">{ex["flag"]} {ex["code"]}</td>'
-        f'<td>{ex["city"]}</td>'
-        f'<td>{ex["country"]}</td>'
-        f'<td>{local_time_str}</td>'
-        f'<td>{stav}</td>'
-        f'</tr>'
-    )
-
-table_html = (
-    '<div class="board-wrap"><table class="board">'
-    '<thead><tr><th>Burza</th><th>Mesto</th><th>Štát</th><th>Miestny čas</th><th>Stav</th></tr></thead>'
-    f'<tbody>{"".join(row_parts)}</tbody>'
-    '</table></div>'
-)
-
-st.markdown(table_html, unsafe_allow_html=True)
-
 
 # ============================================================
 # DIVIDEND TRACKER
 # ============================================================
 
+# Načítanie držieb zo súboru
 if "holdings" not in st.session_state:
     _loaded = load_holdings()
     st.session_state.holdings = {tkr: rec.get("qty", 0) for tkr, rec in _loaded.items()}
@@ -279,8 +257,6 @@ if "holdings_exchange" not in st.session_state:
 
 
 def estimate_dividend_frequency(dividends) -> str:
-    """Odhadne frekvenciu vyplácania dividend na základe priemerného odstupu
-    medzi poslednými výplatami (max. posledných 8 záznamov z histórie)."""
     if dividends is None or len(dividends) < 2:
         return "N/A"
 
@@ -308,7 +284,6 @@ def estimate_dividend_frequency(dividends) -> str:
 
 
 def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
-    """Čistá (bez siete) funkcia, ktorá spracuje surové dáta z yfinance do prehľadného záznamu."""
     price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
     if price is None:
         return None
@@ -334,12 +309,9 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
             ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).date()
         except Exception:
             ex_div_date = None
-    # POZOR: zámerne sa tu nerobí fallback na posledný historický dátum dividendy.
-    # Sekcia 3 má zobrazovať iba oficiálne oznámený (Yahoo Finance) Ex-Div dátum.
 
     annual_rate = info.get("dividendRate")
     if annual_rate is None and last_div_amount is not None:
-        # Odhad pri chýbajúcom údaji - predpoklad štvrťročnej výplaty
         annual_rate = last_div_amount * 4
 
     return {
@@ -348,6 +320,7 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
         "currency": currency,
         "price": float(price),
         "exchange": exchange_name,
+        "exchange_code": exchange_code,  # doplnené pre dynamické burzy
         "country": country,
         "last_div_amount": last_div_amount,
         "ex_div_date": ex_div_date,
@@ -358,7 +331,6 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_data(ticker: str):
-    """Stiahne údaje o akcii (cena, meno, dividendy) cez yfinance. Vráti None pri chybe/neplatnom tickeri."""
     try:
         t = yf.Ticker(ticker)
         info = t.info or {}
@@ -409,7 +381,6 @@ if submitted:
             save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
             st.success(f"Pridané: {format_qty(qty_in)} ks {ticker_clean} ({new_data['name']})")
     else:
-        # qty_in < 0 -> pokus o odobratie akcií z portfólia
         current_qty = st.session_state.holdings.get(ticker_clean, 0)
         if current_qty <= 0:
             st.info(f"Akcia „{ticker_clean}“ nie je momentálne vlastnená, nie je čo odobrať.")
@@ -440,6 +411,53 @@ for _tkr in st.session_state.holdings:
         stock_records[_tkr] = _rec
         st.session_state.holdings_exchange[_tkr] = _rec["exchange"]
 
+# --------- Prehľad búrz (doplnený o burzy z držieb) ---------
+# Základné burzy + dynamické extra podľa holdings
+existing_cities = {ex["city"] for ex in EXCHANGES}
+owned_codes = {rec.get("exchange_code") for rec in stock_records.values() if rec.get("exchange_code")}
+extras = []
+for code in owned_codes:
+    info = EXTRA_MARKETS_BY_CODE.get(code)
+    if not info:
+        continue
+    if info["city"] in existing_cities:
+        continue
+    extras.append(info)
+    existing_cities.add(info["city"])
+
+exchanges_display = EXCHANGES + extras
+
+results = [(ex, get_status(ex, now_utc)) for ex in exchanges_display]
+results.sort(key=lambda item: (not item[1]["is_open"], item[1]["delta"]))
+
+row_parts = []
+for ex, status in results:
+    local_time_str = status["local_time"].strftime("%H:%M")
+    row_class = "row-open" if status["is_open"] else "row-closed"
+
+    if status["is_open"]:
+        stav = f"● OTVORENÉ — {format_delta(status['delta']).upper()}"
+    else:
+        stav = f"● ZATVORENÉ — O {format_delta(status['delta']).upper()}"
+
+    row_parts.append(
+        f'<tr class="{row_class}">'
+        f'<td class="code-cell">{ex["flag"]} {ex["code"]}</td>'
+        f'<td>{ex["city"]}</td>'
+        f'<td>{ex["country"]}</td>'
+        f'<td>{local_time_str}</td>'
+        f'<td>{stav}</td>'
+        f'</tr>'
+    )
+
+table_html = (
+    '<div class="board-wrap"><table class="board">'
+    '<thead><tr><th>Burza</th><th>Mesto</th><th>Štát</th><th>Miestny čas</th><th>Stav</th></tr></thead>'
+    f'<tbody>{"".join(row_parts)}</tbody>'
+    '</table></div>'
+)
+
+st.markdown(table_html, unsafe_allow_html=True)
 
 # --------- Sekcia 2: Moje akcie (editovateľná tabuľka) ---------
 st.markdown("#### 💼 Moje akcie")
@@ -455,11 +473,17 @@ else:
             name = tkr
             exchange_str = st.session_state.holdings_exchange.get(tkr) or "N/A"
             country_str = "N/A"
+            div_rocne_str = "N/A"
         else:
             price_str = f"{rec['price']:.2f} {rec['currency']}".strip()
             name = rec["name"]
             exchange_str = rec["exchange"]
             country_str = rec["country"]
+            pct_annual = None
+            if rec.get("annual_rate") is not None and rec.get("price"):
+                pct_annual = (rec["annual_rate"] / rec["price"]) * 100
+            div_rocne_str = f"{pct_annual:.2f} %" if pct_annual is not None else "N/A"
+
         holdings_rows.append(
             {
                 "Ticker": tkr,
@@ -467,7 +491,8 @@ else:
                 "Burza": exchange_str,
                 "Štát": country_str,
                 "Aktuálna cena": price_str,
-                "Množstvo": qty,
+                "Div.Rocne[%]": div_rocne_str,
+                "Množstvo": format_qty(qty),  # text, zarovnané doľava
             }
         )
 
@@ -481,17 +506,26 @@ else:
             "Burza": st.column_config.TextColumn(disabled=True),
             "Štát": st.column_config.TextColumn(disabled=True),
             "Aktuálna cena": st.column_config.TextColumn(disabled=True),
-            "Množstvo": st.column_config.NumberColumn(
-                min_value=0.0, step=0.0001, format="%.4f"
-            ),
+            "Div.Rocne[%]": st.column_config.TextColumn(disabled=True),
+            # Množstvo ako text kvôli ľavému zarovnaniu
+            "Množstvo": st.column_config.TextColumn(help="Zadaj množstvo. Desatinnú čiarku môžeš použiť bodkou alebo čiarkou."),
         },
         hide_index=True,
         use_container_width=True,
         key="holdings_editor",
     )
 
+    # Uloženie (parsovanie textu na float; záporné hodnoty zrežem na 0)
     for _, row in edited_df.iterrows():
-        st.session_state.holdings[row["Ticker"]] = float(row["Množstvo"])
+        raw = str(row["Množstvo"]).replace(",", ".").strip()
+        try:
+            new_qty = float(raw)
+        except Exception:
+            # Ak sa nedá parsovať, ponechaj pôvodnú hodnotu
+            new_qty = float(st.session_state.holdings.get(row["Ticker"], 0))
+        if new_qty < 0:
+            new_qty = 0.0
+        st.session_state.holdings[row["Ticker"]] = float(new_qty)
 
     save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
 
@@ -508,7 +542,6 @@ else:
         rec = stock_records.get(tkr)
         if rec is None or rec["ex_div_date"] is None:
             continue
-        # Zobrazujeme len akcie s oficiálne oznámeným Ex-Div dátumom, ktorý je dnes alebo v budúcnosti.
         if rec["ex_div_date"] < today:
             continue
 
@@ -549,10 +582,17 @@ else:
             )
             pct_last_str = f"{r['pct_last']:.2f} %" if r["pct_last"] is not None else "N/A"
             pct_annual_str = f"{r['pct_annual']:.2f} %" if r["pct_annual"] is not None else "N/A"
-            expected_str = (
-                f"{r['expected']:.2f} {r['currency']}".strip()
-                if r["expected"] is not None else "N/A"
-            )
+
+            expected_str = "N/A"
+            if r["expected"] is not None:
+                expected_str = f"{r['expected']:.2f} {r['currency']}".strip()
+                # USD prepočet v zátvorke, ak mena != USD
+                if r["currency"] and r["currency"].upper() != "USD":
+                    rate = get_fx_to_usd_rate(r["currency"])
+                    if rate:
+                        usd_amount = r["expected"] * rate
+                        expected_str += f" (USD {usd_amount:.2f})"
+
             date_str = r["ex_date"].strftime("%d/%m/%y")
 
             div_row_parts.append(
