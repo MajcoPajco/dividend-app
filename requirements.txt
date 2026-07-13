@@ -4,3 +4,4 @@ tzdata
 pandas
 yfinance
 requests
+redeployni
