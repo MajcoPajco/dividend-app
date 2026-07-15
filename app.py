@@ -315,7 +315,22 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
     annual_rate = info.get("dividendRate")
     if annual_rate is None and last_div_amount is not None:
         annual_rate = last_div_amount * 4
-    dividend_yield_pct = _normalize_yield_pct(info.get("dividendYield"))
+    # Yahoo GBp/GBP mixup: LSE tituly su kotovane v pencoch (mena "GBp"), ale
+    # Yahoo niekedy vracia "dividendRate" v librach (GBP) namiesto pencov -
+    # chyba faktora 100. Ak by rocna dividenda vysla mensia ako uz vyplatena
+    # jedna splatka, ide presne o tento pripad.
+    if (
+        currency == "GBp"
+        and annual_rate is not None
+        and last_div_amount
+        and annual_rate < last_div_amount
+    ):
+        annual_rate *= 100
+    dividend_yield_pct = None
+    if annual_rate is not None and price:
+        dividend_yield_pct = annual_rate / price * 100
+    if dividend_yield_pct is None:
+        dividend_yield_pct = _normalize_yield_pct(info.get("dividendYield"))
     if dividend_yield_pct is None:
         dividend_yield_pct = _normalize_yield_pct(info.get("trailingAnnualDividendYield"))
     return {
