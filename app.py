@@ -277,6 +277,22 @@ def estimate_dividend_frequency(dividends) -> str:
         return "Nepravidelne"
 
 
+def _normalize_yield_pct(raw) -> float | None:
+    """Yahoo/yfinance vracia dividendYield niekedy ako zlomok (0.0557),
+    inokedy uz ako percento (5.57) - zjednotime na percento."""
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except Exception:
+        return None
+    if val <= 0:
+        return None
+    if val <= 1:
+        val *= 100
+    return val
+
+
 def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
     price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
     if price is None:
@@ -299,6 +315,9 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
     annual_rate = info.get("dividendRate")
     if annual_rate is None and last_div_amount is not None:
         annual_rate = last_div_amount * 4
+    dividend_yield_pct = _normalize_yield_pct(info.get("dividendYield"))
+    if dividend_yield_pct is None:
+        dividend_yield_pct = _normalize_yield_pct(info.get("trailingAnnualDividendYield"))
     return {
         "ticker": ticker,
         "name": name,
@@ -310,6 +329,7 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
         "last_div_amount": last_div_amount,
         "ex_div_date": ex_div_date,
         "annual_rate": annual_rate,
+        "dividend_yield_pct": dividend_yield_pct,
         "frequency": frequency,
     }
 
@@ -621,7 +641,9 @@ else:
         annual_rate = rec["annual_rate"]
         currency = rec["currency"]
         pct_last = (last_div / price * 100) if (last_div is not None and price) else None
-        pct_annual = (annual_rate / price * 100) if (annual_rate is not None and price) else None
+        pct_annual = rec.get("dividend_yield_pct")
+        if pct_annual is None:
+            pct_annual = (annual_rate / price * 100) if (annual_rate is not None and price) else None
         expected = (last_div * qty) if last_div is not None else None
         div_rows.append({
             "ticker": tkr,
@@ -691,7 +713,7 @@ else:
             '<div class="board-wrap"><table class="board"><thead><tr>'
             '<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Ex-Div Date</th>'
             '<th>Frekvencia</th><th>Dividenda/akcia</th><th>Rocna divi./akcia</th>'
-            '<th>% k cene</th><th>% rocne</th><th>Ocak. vynos</th>'
+            '<th>% k cene</th><th>Div Yield</th><th>Ocak. vynos</th>'
             f'</tr></thead><tbody>{"".join(div_row_parts)}</tbody></table></div>',
             unsafe_allow_html=True,
         )
