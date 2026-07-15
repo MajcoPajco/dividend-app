@@ -206,6 +206,39 @@ def get_fx_to_usd_rate(currency: str | None) -> float | None:
     return None
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def lookup_ticker_by_isin(isin: str) -> dict | None:
+    """Pokusi sa najst ticker symbol na zaklade ISIN kodu (cez Yahoo Finance search)."""
+    isin_clean = (isin or "").strip().upper()
+    if not isin_clean:
+        return None
+    try:
+        resp = requests.get(
+            "https://query2.finance.yahoo.com/v1/finance/search",
+            params={"q": isin_clean, "quotesCount": 10, "newsCount": 0},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return None
+        quotes = (resp.json() or {}).get("quotes", []) or []
+        if not quotes:
+            return None
+        # Preferuj akcie/ETF pred inymi typmi vysledkov (napr. options, futures)
+        preferred = [q for q in quotes if q.get("quoteType") in ("EQUITY", "ETF")]
+        best = (preferred or quotes)[0]
+        symbol = best.get("symbol")
+        if not symbol:
+            return None
+        return {
+            "symbol": symbol,
+            "name": best.get("shortname") or best.get("longname") or symbol,
+            "exchange": best.get("exchDisp") or "",
+        }
+    except Exception:
+        return None
+
+
 def estimate_dividend_frequency(dividends) -> str:
     if dividends is None or len(dividends) < 2:
         return "N/A"
@@ -374,22 +407,73 @@ st.markdown(
 
 st.markdown("#### ➕ Pridat akciu")
 
-with st.form(key="add_stock_form", clear_on_submit=True):
-    c1, c2, c3 = st.columns([3, 2, 1])
-    with c1:
-        ticker_in = st.text_input("Ticker", placeholder="napr. AAPL", label_visibility="collapsed")
-    with c2:
-        qty_in = st.number_input(
-            "Mnozstvo", step=0.0001, value=None, format="%.4f",
-            placeholder="Mnozstvo", label_visibility="collapsed",
-        )
-    with c3:
-        submitted = st.form_submit_button("Pridat", use_container_width=True)
+add_mode = st.radio(
+    "Sposob pridania",
+    options=["Podla tickeru", "Podla ISIN"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="add_mode",
+)
 
-st.caption("Kladne mnozstvo = nakup (pridanie). Zaporne mnozstvo = predaj (odpocet z portfolia).")
+ticker_clean = None
+qty_in = None
 
-if submitted:
-    ticker_clean = ticker_in.strip().upper()
+if add_mode == "Podla tickeru":
+    with st.form(key="add_stock_form_ticker", clear_on_submit=True):
+        c1, c2, c3 = st.columns([3, 2, 1])
+        with c1:
+            ticker_in = st.text_input("Ticker", placeholder="napr. AAPL", label_visibility="collapsed")
+        with c2:
+            qty_in_raw = st.number_input(
+                "Mnozstvo", step=0.0001, value=None, format="%.4f",
+                placeholder="Mnozstvo", label_visibility="collapsed", key="qty_ticker",
+            )
+        with c3:
+            submitted = st.form_submit_button("Pridat", use_container_width=True)
+
+    st.caption("Kladne mnozstvo = nakup (pridanie). Zaporne mnozstvo = predaj (odpocet z portfolia).")
+
+    if submitted:
+        ticker_clean = ticker_in.strip().upper()
+        qty_in = qty_in_raw
+
+else:
+    with st.form(key="add_stock_form_isin", clear_on_submit=True):
+        c1, c2, c3 = st.columns([3, 2, 1])
+        with c1:
+            isin_in = st.text_input(
+                "ISIN", placeholder="napr. US0378331005", label_visibility="collapsed"
+            )
+        with c2:
+            qty_in_raw = st.number_input(
+                "Mnozstvo", step=0.0001, value=None, format="%.4f",
+                placeholder="Mnozstvo", label_visibility="collapsed", key="qty_isin",
+            )
+        with c3:
+            submitted = st.form_submit_button("Pridat", use_container_width=True)
+
+    st.caption(
+        "Zadaj ISIN kod akcie (napr. US0378331005) - ticker sa dohlada automaticky. "
+        "Kladne mnozstvo = nakup, zaporne = predaj."
+    )
+
+    if submitted:
+        isin_clean = isin_in.strip().upper()
+        if not isin_clean:
+            st.warning("Zadaj ISIN kod akcie.")
+        else:
+            isin_info = lookup_ticker_by_isin(isin_clean)
+            if isin_info is None:
+                st.error(f'Pre ISIN "{isin_clean}" sa nepodarilo najst zodpovedajuci ticker.')
+            else:
+                ticker_clean = isin_info["symbol"].upper()
+                qty_in = qty_in_raw
+                st.info(
+                    f'ISIN {isin_clean} rozpoznany ako ticker **{ticker_clean}** '
+                    f'({isin_info.get("name", "")}).'
+                )
+
+if ticker_clean is not None:
     if not ticker_clean:
         st.warning("Zadaj ticker akcie.")
     elif qty_in is None or qty_in == 0:
@@ -522,6 +606,7 @@ else:
             "ex_date": rec["ex_div_date"],
             "frequency": rec["frequency"],
             "last_div": last_div,
+            "annual_rate": annual_rate,
             "pct_last": pct_last,
             "pct_annual": pct_annual,
             "expected": expected,
@@ -540,6 +625,16 @@ else:
             )
             pct_last_str = f"{r['pct_last']:.2f} %" if r["pct_last"] is not None else "N/A"
             pct_annual_str = f"{r['pct_annual']:.2f} %" if r["pct_annual"] is not None else "N/A"
+
+            annual_div_str = "N/A"
+            if r["annual_rate"] is not None:
+                curr = r["currency"]
+                annual_div_str = f"{r['annual_rate']:.4f} {curr}".strip()
+                is_usd_a = curr.upper() == "USD" if curr else True
+                if not is_usd_a:
+                    rate_a = get_fx_to_usd_rate(curr)
+                    if rate_a is not None:
+                        annual_div_str += f" (~ USD {r['annual_rate'] * rate_a:.2f})"
 
             expected_str = "N/A"
             if r["expected"] is not None:
@@ -561,6 +656,7 @@ else:
                 f'<td>{r["ex_date"].strftime("%d/%m/%y")}</td>'
                 f'<td>{r["frequency"]}</td>'
                 f'<td>{last_div_str}</td>'
+                f'<td>{annual_div_str}</td>'
                 f'<td>{pct_last_str}</td>'
                 f'<td>{pct_annual_str}</td>'
                 f'<td>{expected_str}</td>'
@@ -570,7 +666,7 @@ else:
         st.markdown(
             '<div class="board-wrap"><table class="board"><thead><tr>'
             '<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Ex-Div Date</th>'
-            '<th>Frekvencia</th><th>Dividenda/akcia</th>'
+            '<th>Frekvencia</th><th>Dividenda/akcia</th><th>Rocna divi./akcia</th>'
             '<th>% k cene</th><th>% rocne</th><th>Ocak. vynos</th>'
             f'</tr></thead><tbody>{"".join(div_row_parts)}</tbody></table></div>',
             unsafe_allow_html=True,
