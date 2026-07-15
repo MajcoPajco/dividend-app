@@ -207,6 +207,21 @@ def get_fx_to_usd_rate(currency: str | None) -> float | None:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def lookup_isin_by_ticker(ticker: str) -> str | None:
+    """Pokusi sa najst ISIN kod na zaklade tickeru (cez yfinance)."""
+    ticker_clean = (ticker or "").strip().upper()
+    if not ticker_clean:
+        return None
+    try:
+        isin = yf.Ticker(ticker_clean).isin
+        if isin and isin.upper() not in ("NA", "-", "NONE", ""):
+            return isin.upper()
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def lookup_ticker_by_isin(isin: str) -> dict | None:
     """Pokusi sa najst ticker symbol na zaklade ISIN kodu (cez Yahoo Finance search)."""
     isin_clean = (isin or "").strip().upper()
@@ -407,110 +422,119 @@ st.markdown(
 
 st.markdown("#### ➕ Pridat akciu")
 
-add_mode = st.radio(
-    "Sposob pridania",
-    options=["Podla tickeru", "Podla ISIN"],
-    horizontal=True,
-    label_visibility="collapsed",
-    key="add_mode",
-)
 
-ticker_clean = None
-qty_in = None
+def _sync_isin_from_ticker() -> None:
+    t = (st.session_state.get("add_ticker_field") or "").strip().upper()
+    st.session_state["add_ticker_field"] = t
+    if t:
+        isin = lookup_isin_by_ticker(t)
+        if isin:
+            st.session_state["add_isin_field"] = isin
 
-if add_mode == "Podla tickeru":
-    with st.form(key="add_stock_form_ticker", clear_on_submit=True):
-        c1, c2, c3 = st.columns([3, 2, 1])
-        with c1:
-            ticker_in = st.text_input("Ticker", placeholder="napr. AAPL", label_visibility="collapsed")
-        with c2:
-            qty_in_raw = st.number_input(
-                "Mnozstvo", step=0.0001, value=None, format="%.4f",
-                placeholder="Mnozstvo", label_visibility="collapsed", key="qty_ticker",
-            )
-        with c3:
-            submitted = st.form_submit_button("Pridat", use_container_width=True)
 
-    st.caption("Kladne mnozstvo = nakup (pridanie). Zaporne mnozstvo = predaj (odpocet z portfolia).")
+def _sync_ticker_from_isin() -> None:
+    i = (st.session_state.get("add_isin_field") or "").strip().upper()
+    st.session_state["add_isin_field"] = i
+    if i:
+        info = lookup_ticker_by_isin(i)
+        if info:
+            st.session_state["add_ticker_field"] = info["symbol"].upper()
 
-    if submitted:
-        ticker_clean = ticker_in.strip().upper()
-        qty_in = qty_in_raw
 
-else:
-    with st.form(key="add_stock_form_isin", clear_on_submit=True):
-        c1, c2, c3 = st.columns([3, 2, 1])
-        with c1:
-            isin_in = st.text_input(
-                "ISIN", placeholder="napr. US0378331005", label_visibility="collapsed"
-            )
-        with c2:
-            qty_in_raw = st.number_input(
-                "Mnozstvo", step=0.0001, value=None, format="%.4f",
-                placeholder="Mnozstvo", label_visibility="collapsed", key="qty_isin",
-            )
-        with c3:
-            submitted = st.form_submit_button("Pridat", use_container_width=True)
+def _on_add_stock_click() -> None:
+    ticker_clean = (st.session_state.get("add_ticker_field") or "").strip().upper()
+    isin_clean = (st.session_state.get("add_isin_field") or "").strip().upper()
+    qty_val = st.session_state.get("add_qty_field")
 
-    st.caption(
-        "Zadaj ISIN kod akcie (napr. US0378331005) - ticker sa dohlada automaticky. "
-        "Kladne mnozstvo = nakup, zaporne = predaj."
-    )
+    # Ak ticker chyba, ale ISIN je vyplneny, skus este raz dotiahnut ticker z ISIN.
+    if not ticker_clean and isin_clean:
+        info = lookup_ticker_by_isin(isin_clean)
+        if info:
+            ticker_clean = info["symbol"].upper()
+            st.session_state["add_ticker_field"] = ticker_clean
 
-    if submitted:
-        isin_clean = isin_in.strip().upper()
-        if not isin_clean:
-            st.warning("Zadaj ISIN kod akcie.")
-        else:
-            isin_info = lookup_ticker_by_isin(isin_clean)
-            if isin_info is None:
-                st.error(f'Pre ISIN "{isin_clean}" sa nepodarilo najst zodpovedajuci ticker.')
-            else:
-                ticker_clean = isin_info["symbol"].upper()
-                qty_in = qty_in_raw
-                st.info(
-                    f'ISIN {isin_clean} rozpoznany ako ticker **{ticker_clean}** '
-                    f'({isin_info.get("name", "")}).'
-                )
-
-if ticker_clean is not None:
     if not ticker_clean:
-        st.warning("Zadaj ticker akcie.")
-    elif qty_in is None or qty_in == 0:
-        st.warning("Zadaj mnozstvo rozne od 0.")
-    elif qty_in > 0:
+        st.session_state["add_stock_msg"] = ("warning", "Zadaj ticker alebo ISIN akcie.")
+        return
+    if qty_val is None or qty_val == 0:
+        st.session_state["add_stock_msg"] = ("warning", "Zadaj mnozstvo rozne od 0.")
+        return
+
+    if qty_val > 0:
         new_data = fetch_stock_data(ticker_clean)
         if new_data is None:
-            st.error(f'Ticker "{ticker_clean}" sa nepodarilo najst.')
-        else:
-            st.session_state.holdings[ticker_clean] = (
-                st.session_state.holdings.get(ticker_clean, 0) + qty_in
-            )
-            st.session_state.holdings_exchange[ticker_clean] = new_data.get("exchange", "")
-            save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
-            st.success(f'Pridane: {format_qty(qty_in)} ks {ticker_clean} ({new_data["name"]})')
+            st.session_state["add_stock_msg"] = ("error", f'Ticker "{ticker_clean}" sa nepodarilo najst.')
+            return
+        st.session_state.holdings[ticker_clean] = (
+            st.session_state.holdings.get(ticker_clean, 0) + qty_val
+        )
+        st.session_state.holdings_exchange[ticker_clean] = new_data.get("exchange", "")
+        save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
+        st.session_state["add_stock_msg"] = (
+            "success", f'Pridane: {format_qty(qty_val)} ks {ticker_clean} ({new_data["name"]})'
+        )
     else:
         current_qty = st.session_state.holdings.get(ticker_clean, 0)
         if current_qty <= 0:
-            st.info(f'Akcia "{ticker_clean}" nie je momentalne vlastnena, nie je co odobrat.')
+            st.session_state["add_stock_msg"] = (
+                "info", f'Akcia "{ticker_clean}" nie je momentalne vlastnena, nie je co odobrat.'
+            )
+            return
+        remove_qty = abs(qty_val)
+        new_qty = current_qty - remove_qty
+        if new_qty <= 0:
+            del st.session_state.holdings[ticker_clean]
+            st.session_state.holdings_exchange.pop(ticker_clean, None)
+            extra_note = (
+                " (odobrate bolo viac, nez si vlastnil, pozicia bola vynulovana)"
+                if remove_qty > current_qty else ""
+            )
+            st.session_state["add_stock_msg"] = (
+                "success", f'Odobrate vsetkych {format_qty(current_qty)} ks {ticker_clean}.{extra_note}'
+            )
         else:
-            remove_qty = abs(qty_in)
-            new_qty = current_qty - remove_qty
-            if new_qty <= 0:
-                del st.session_state.holdings[ticker_clean]
-                st.session_state.holdings_exchange.pop(ticker_clean, None)
-                extra_note = (
-                    " (odobrate bolo viac, nez si vlastnil, pozicia bola vynulovana)"
-                    if remove_qty > current_qty else ""
-                )
-                st.success(f'Odobrate vsetkych {format_qty(current_qty)} ks {ticker_clean}.{extra_note}')
-            else:
-                st.session_state.holdings[ticker_clean] = new_qty
-                st.success(
-                    f'Odobrate {format_qty(remove_qty)} ks {ticker_clean}. '
-                    f'Novy stav: {format_qty(new_qty)} ks.'
-                )
-            save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
+            st.session_state.holdings[ticker_clean] = new_qty
+            st.session_state["add_stock_msg"] = (
+                "success",
+                f'Odobrate {format_qty(remove_qty)} ks {ticker_clean}. '
+                f'Novy stav: {format_qty(new_qty)} ks.'
+            )
+        save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
+
+    # Po uspesnom pridani/odobrati vycisti vsetky polia.
+    st.session_state["add_ticker_field"] = ""
+    st.session_state["add_isin_field"] = ""
+    st.session_state["add_qty_field"] = None
+
+
+c1, c2, c3, c4 = st.columns([2.3, 2.3, 1.6, 1])
+with c1:
+    st.text_input(
+        "Ticker", placeholder="Ticker, napr. AAPL", label_visibility="collapsed",
+        key="add_ticker_field", on_change=_sync_isin_from_ticker,
+    )
+with c2:
+    st.text_input(
+        "ISIN", placeholder="ISIN, napr. US0378331005", label_visibility="collapsed",
+        key="add_isin_field", on_change=_sync_ticker_from_isin,
+    )
+with c3:
+    st.number_input(
+        "Mnozstvo", step=0.0001, value=None, format="%.4f",
+        placeholder="Mnozstvo", label_visibility="collapsed", key="add_qty_field",
+    )
+with c4:
+    st.button("Pridat", use_container_width=True, on_click=_on_add_stock_click)
+
+st.caption(
+    "Staci vyplnit ticker ALEBO ISIN - druhe pole sa po opusteni riadku dohlada automaticky. "
+    "Kladne mnozstvo = nakup (pridanie), zaporne mnozstvo = predaj (odpocet z portfolia)."
+)
+
+_add_stock_msg = st.session_state.pop("add_stock_msg", None)
+if _add_stock_msg:
+    _msg_kind, _msg_text = _add_stock_msg
+    getattr(st, _msg_kind)(_msg_text)
 
 # ============================================================
 # SEKCIA 3 - MOJE AKCIE
