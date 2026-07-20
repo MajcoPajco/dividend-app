@@ -1,14 +1,22 @@
-from __future__ import annotations
+#import os
+#os.environ['HTTPS_PROXY'] = 'http://rb-proxy-de.bsh.corp.bshg.com:8080'
+#os.environ['HTTP_PROXY'] = 'http://rb-proxy-de.bsh.corp.bshg.com:8080'
 
 import json
 from pathlib import Path
-
 import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import requests
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials as _GoogleCredentials
+except Exception:
+    gspread = None
+    _GoogleCredentials = None
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -120,9 +128,59 @@ def format_qty(q: float) -> str:
 
 
 HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
+GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
+
+
+@st.cache_resource(show_spinner=False)
+def _get_gsheet_worksheet():
+    """Vrati Google Sheet worksheet, ak je v st.secrets nastaveny GCP service
+    account + URL hardu. Ak nie je nastaveny (napr. lokalne spustanie bez
+    secrets.toml) alebo nastavenie zlyha, vrati None - appka potom automaticky
+    pouzije lokalny JSON subor ako zalohu (viz load_holdings/save_holdings)."""
+    if gspread is None or _GoogleCredentials is None:
+        return None
+    if "gcp_service_account" not in st.secrets or "gsheet_url" not in st.secrets:
+        return None
+    try:
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = _GoogleCredentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]), scopes=scopes
+        )
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_url(st.secrets["gsheet_url"])
+        try:
+            ws = sh.worksheet("Holdings")
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
+            ws.update([GSHEET_HEADER])
+        return ws
+    except Exception:
+        return None
 
 
 def load_holdings() -> dict:
+    ws = _get_gsheet_worksheet()
+    if ws is not None:
+        try:
+            records = ws.get_all_records()
+            result = {}
+            for r in records:
+                tkr = str(r.get("Ticker", "")).strip().upper()
+                if not tkr:
+                    continue
+                try:
+                    qty = float(r.get("Qty", 0) or 0)
+                except Exception:
+                    qty = 0.0
+                result[tkr] = {"qty": qty, "exchange": r.get("Exchange", "")}
+            return result
+        except Exception:
+            pass
+    # Zalozny lokalny subor - pouziva sa, ak Google Sheets nie je nastaveny
+    # (typicky pri lokalnom spustani bez .streamlit/secrets.toml).
     if not HOLDINGS_FILE.exists():
         return {}
     try:
@@ -134,6 +192,18 @@ def load_holdings() -> dict:
 
 
 def save_holdings(holdings: dict, exchanges: dict) -> None:
+    ws = _get_gsheet_worksheet()
+    if ws is not None:
+        try:
+            rows = [GSHEET_HEADER] + [
+                [tkr, qty, exchanges.get(tkr, "")] for tkr, qty in holdings.items()
+            ]
+            ws.clear()
+            ws.update(rows)
+            return
+        except Exception:
+            pass
+    # Zalozny lokalny subor
     data = {
         tkr: {"qty": qty, "exchange": exchanges.get(tkr, "")}
         for tkr, qty in holdings.items()
@@ -169,6 +239,20 @@ def format_delta(delta: timedelta) -> str:
     total_minutes = int(delta.total_seconds() // 60)
     hours, minutes = divmod(total_minutes, 60)
     return f"{hours} h {minutes:02d} min"
+
+
+class _LookupMiss(Exception):
+    """Interna vynimka na oznacenie neuspesneho vyhladania.
+
+    Doleziite: st.cache_data cachuje len uspesne (return) hodnoty, nie
+    vynimky. Ak by sme pri zlyhani vratili None/False, Streamlit by si
+    tento neuspech ulozil do cache na cely TTL (5 min / 1 hod) a dalsie
+    pokusy by ani neskusili siahnut na Yahoo znova - presne toto sposobovalo,
+    ze po jednom zlyhanom (napr. docasne zahltenom/rate-limitovanom) pokuse
+    appka "natvrdo" hlasila "nenajdene" aj ked by dalsi pokus uz uspel.
+    Vyhodenim vynimky sa neuspech necachuje a kazdy dalsi klik to skusi znova.
+    """
+    pass
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -207,49 +291,65 @@ def get_fx_to_usd_rate(currency: str | None) -> float | None:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _lookup_isin_by_ticker_cached(ticker_clean: str) -> str:
+    isin = yf.Ticker(ticker_clean).isin
+    if not isin or isin.upper() in ("NA", "-", "NONE", ""):
+        raise _LookupMiss(f"no isin for {ticker_clean}")
+    return isin.upper()
+
+
 def lookup_isin_by_ticker(ticker: str) -> str | None:
-    """Pokusi sa najst ISIN kod na zaklade tickeru (cez yfinance)."""
+    """Pokusi sa najst ISIN kod na zaklade tickeru (cez yfinance).
+
+    Poznamka: Yahoo/yfinance nema oficialne API pre smer ticker -> ISIN.
+    yfinance to interne riesi experimentalnym vyhladavanim nazvu firmy na
+    Business Insideri, co sa nemusi podarit uplne pre kazdy ticker (chyba
+    zhoda vo formate, titul tam nie je uvedeny a pod.) - to je limit
+    externeho zdroja dat, nie chyba tejto appky. Ak sa ISIN nenajde, akciu
+    je stale mozne pridat len podla tickeru.
+    """
     ticker_clean = (ticker or "").strip().upper()
     if not ticker_clean:
         return None
     try:
-        isin = yf.Ticker(ticker_clean).isin
-        if isin and isin.upper() not in ("NA", "-", "NONE", ""):
-            return isin.upper()
+        return _lookup_isin_by_ticker_cached(ticker_clean)
     except Exception:
-        pass
-    return None
+        return None
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _lookup_ticker_by_isin_cached(isin_clean: str) -> dict:
+    search = yf.Search(isin_clean, max_results=10, news_count=0)
+    quotes = search.quotes or []
+    if not quotes:
+        raise _LookupMiss(f"no quotes for {isin_clean}")
+    # Preferuj akcie/ETF pred inymi typmi vysledkov (napr. options, futures)
+    preferred = [q for q in quotes if q.get("quoteType") in ("EQUITY", "ETF")]
+    best = (preferred or quotes)[0]
+    symbol = best.get("symbol")
+    if not symbol:
+        raise _LookupMiss(f"no symbol for {isin_clean}")
+    return {
+        "symbol": symbol,
+        "name": best.get("shortname") or best.get("longname") or symbol,
+        "exchange": best.get("exchDisp") or "",
+    }
+
+
 def lookup_ticker_by_isin(isin: str) -> dict | None:
-    """Pokusi sa najst ticker symbol na zaklade ISIN kodu (cez Yahoo Finance search)."""
+    """Pokusi sa najst ticker symbol na zaklade ISIN kodu (cez Yahoo Finance search).
+
+    Poznamka: Yahoo dnes vyzaduje pre svoje API platny "crumb" + cookie session
+    (bez toho vracia 401 Unauthorized). Priamy `requests.get` na search endpoint
+    tuto autentifikaciu nemal, preto vzdy zlyhaval. yfinance.Search si crumb/cookie
+    session zaladuje a spravuje sam (tou istou session, ktoru uz aj tak pouziva
+    zvysok appky pre .info a dividendy), takze pouzivame ju namiesto ruceho requestu.
+    """
     isin_clean = (isin or "").strip().upper()
     if not isin_clean:
         return None
     try:
-        resp = requests.get(
-            "https://query2.finance.yahoo.com/v1/finance/search",
-            params={"q": isin_clean, "quotesCount": 10, "newsCount": 0},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=8,
-        )
-        if resp.status_code != 200:
-            return None
-        quotes = (resp.json() or {}).get("quotes", []) or []
-        if not quotes:
-            return None
-        # Preferuj akcie/ETF pred inymi typmi vysledkov (napr. options, futures)
-        preferred = [q for q in quotes if q.get("quoteType") in ("EQUITY", "ETF")]
-        best = (preferred or quotes)[0]
-        symbol = best.get("symbol")
-        if not symbol:
-            return None
-        return {
-            "symbol": symbol,
-            "name": best.get("shortname") or best.get("longname") or symbol,
-            "exchange": best.get("exchDisp") or "",
-        }
+        return _lookup_ticker_by_isin_cached(isin_clean)
     except Exception:
         return None
 
@@ -350,12 +450,19 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def _fetch_stock_data_cached(ticker: str) -> dict:
+    t = yf.Ticker(ticker)
+    info = t.info or {}
+    dividends = t.dividends
+    rec = _parse_stock_info(ticker, info, dividends)
+    if rec is None:
+        raise _LookupMiss(f"no price data for {ticker}")
+    return rec
+
+
 def fetch_stock_data(ticker: str):
     try:
-        t = yf.Ticker(ticker)
-        info = t.info or {}
-        dividends = t.dividends
-        return _parse_stock_info(ticker, info, dividends)
+        return _fetch_stock_data_cached(ticker)
     except Exception:
         return None
 
@@ -465,6 +572,13 @@ def _sync_isin_from_ticker() -> None:
         isin = lookup_isin_by_ticker(t)
         if isin:
             st.session_state["add_isin_field"] = isin
+            st.session_state["add_sync_msg"] = None
+        else:
+            st.session_state["add_sync_msg"] = (
+                "info",
+                f'ISIN pre "{t}" sa nepodarilo automaticky dohladat. '
+                "Ak ho poznas, zadaj ho rucne - na pridanie akcie ale ISIN nie je nutny, staci ticker.",
+            )
 
 
 def _sync_ticker_from_isin() -> None:
@@ -474,6 +588,13 @@ def _sync_ticker_from_isin() -> None:
         info = lookup_ticker_by_isin(i)
         if info:
             st.session_state["add_ticker_field"] = info["symbol"].upper()
+            st.session_state["add_sync_msg"] = None
+        else:
+            st.session_state["add_sync_msg"] = (
+                "warning",
+                f'Ticker pre ISIN "{i}" sa nepodarilo najst. Skontroluj, ci je ISIN spravny, '
+                "alebo zadaj ticker rucne.",
+            )
 
 
 def _on_add_stock_click() -> None:
@@ -565,6 +686,11 @@ st.caption(
     "Staci vyplnit ticker ALEBO ISIN - druhe pole sa po opusteni riadku dohlada automaticky. "
     "Kladne mnozstvo = nakup (pridanie), zaporne mnozstvo = predaj (odpocet z portfolia)."
 )
+
+_add_sync_msg = st.session_state.pop("add_sync_msg", None)
+if _add_sync_msg:
+    _sync_kind, _sync_text = _add_sync_msg
+    getattr(st, _sync_kind)(_sync_text)
 
 _add_stock_msg = st.session_state.pop("add_stock_msg", None)
 if _add_stock_msg:
