@@ -543,6 +543,7 @@ def _fetch_growth_data_cached(ticker: str) -> dict:
         hist = None
     return {
         "1m": _pct_change_over_period(hist, 30),
+        "3m": _pct_change_over_period(hist, 91),
         "6m": _pct_change_over_period(hist, 182),
         "1y": _pct_change_over_period(hist, 365),
         "5y": _pct_change_over_period(hist, 1825),
@@ -867,7 +868,7 @@ else:
             price_str, name = "N/A", tkr
             exchange_str = st.session_state.holdings_exchange.get(tkr) or "N/A"
             country_str, div_rocne_str = "N/A", "N/A"
-            growth_strs = {"1m": "N/A", "6m": "N/A", "1y": "N/A", "5y": "N/A"}
+            growth_strs = {"1m": "N/A", "3m": "N/A", "6m": "N/A", "1y": "N/A", "5y": "N/A"}
         else:
             price_str = f"{rec['price']:.2f} {rec['currency']}".strip()
             name, exchange_str, country_str = rec["name"], rec["exchange"], rec["country"]
@@ -878,6 +879,7 @@ else:
             growth = rec.get("growth") or {}
             growth_strs = {
                 "1m": format_growth(growth.get("1m")),
+                "3m": format_growth(growth.get("3m")),
                 "6m": format_growth(growth.get("6m")),
                 "1y": format_growth(growth.get("1y")),
                 "5y": format_growth(growth.get("5y")),
@@ -890,6 +892,7 @@ else:
             "Stat": country_str,
             "Aktualna cena": price_str,
             "Rast 1M [%]": growth_strs["1m"],
+            "Rast 3M [%]": growth_strs["3m"],
             "Rast 6M [%]": growth_strs["6m"],
             "Rast 1R [%]": growth_strs["1y"],
             "Rast 5R [%]": growth_strs["5y"],
@@ -899,7 +902,7 @@ else:
 
     holdings_df = pd.DataFrame(holdings_rows)
 
-    _growth_cols = ["Rast 1M [%]", "Rast 6M [%]", "Rast 1R [%]", "Rast 5R [%]"]
+    _growth_cols = ["Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]", "Rast 1R [%]", "Rast 5R [%]"]
 
     def _style_growth_cell(val):
         if not isinstance(val, str):
@@ -925,6 +928,7 @@ else:
             "Stat": st.column_config.TextColumn(disabled=True),
             "Aktualna cena": st.column_config.TextColumn(disabled=True),
             "Rast 1M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 3M [%]": st.column_config.TextColumn(disabled=True),
             "Rast 6M [%]": st.column_config.TextColumn(disabled=True),
             "Rast 1R [%]": st.column_config.TextColumn(disabled=True),
             "Rast 5R [%]": st.column_config.TextColumn(disabled=True),
@@ -1034,6 +1038,7 @@ else:
                 f'<td>{r["ex_date"].strftime("%d/%m/%y")}</td>'
                 f'<td>{freq_badge_html(r["frequency"])}</td>'
                 f'<td>{growth_cell_html(growth.get("1m"))}</td>'
+                f'<td>{growth_cell_html(growth.get("3m"))}</td>'
                 f'<td>{growth_cell_html(growth.get("6m"))}</td>'
                 f'<td>{growth_cell_html(growth.get("1y"))}</td>'
                 f'<td>{growth_cell_html(growth.get("5y"))}</td>'
@@ -1048,7 +1053,7 @@ else:
         st.markdown(
             '<div class="board-wrap"><table class="board"><thead><tr>'
             '<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Ex-Div Date</th>'
-            '<th>Frekvencia</th><th>Rast 1M</th><th>Rast 6M</th><th>Rast 1R</th><th>Rast 5R</th>'
+            '<th>Frekvencia</th><th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th><th>Rast 1R</th><th>Rast 5R</th>'
             '<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>'
             '<th>% k cene</th><th>Div Yield</th><th>Ocak. vynos</th>'
             f'</tr></thead><tbody>{"".join(div_row_parts)}</tbody></table></div>',
