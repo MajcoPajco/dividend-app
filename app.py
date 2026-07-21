@@ -130,33 +130,24 @@ def format_qty(q: float) -> str:
 HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
 GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
-# Diagnosticky stav (globalny na urovni procesu appky - rovnaky pre vsetkych
-# pouzivatelov jednej nasadenej instancie appky). Zobrazuje sa v UI, aby bolo
-# vidno PRECO sa data neuklada do Google Sheets, namiesto ticheho zlyhania.
-_GSHEET_STATUS = {"ok": False, "detail": "Pripojenie na Google Sheets sa este neskusalo."}
-_GSHEET_LAST_WRITE = {"ok": None, "detail": ""}
-
 
 @st.cache_resource(show_spinner=False)
-def _get_gsheet_worksheet():
-    """Vrati Google Sheet worksheet, ak je v st.secrets nastaveny GCP service
-    account + URL hardu. Ak nie je nastaveny (napr. lokalne spustanie bez
-    secrets.toml) alebo nastavenie zlyha, vrati None - appka potom automaticky
-    pouzije lokalny JSON subor ako zalohu (viz load_holdings/save_holdings).
-    Detaily vysledku (uspech/chyba) uklada do _GSHEET_STATUS pre diagnostiku v UI."""
-    global _GSHEET_STATUS
+def _connect_gsheet():
+    """Pripoji sa na Google Sheet a vrati (worksheet_or_None, status_dict).
+    Vysledok je vykesovany (cache_resource) naprieč vsetkymi reláciami appky,
+    takze sa realne pripojenie skusi len raz - ale status sa vzdy vracia
+    SPOLU s vysledkom, takze sa spravne zobrazuje aj pri cache hit (na rozdiel
+    od samostatnej globalnej premennej, ktora by sa medzi behmi resetovala)."""
     if gspread is None or _GoogleCredentials is None:
-        _GSHEET_STATUS = {
+        return None, {
             "ok": False,
             "detail": "Kniznica gspread / google-auth nie je nainstalovana (skontroluj requirements.txt).",
         }
-        return None
     if "gcp_service_account" not in st.secrets or "gsheet_url" not in st.secrets:
-        _GSHEET_STATUS = {
+        return None, {
             "ok": False,
             "detail": "V st.secrets chyba 'gcp_service_account' alebo 'gsheet_url' - pouziva sa lokalny subor.",
         }
-        return None
     try:
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -172,18 +163,17 @@ def _get_gsheet_worksheet():
         except gspread.WorksheetNotFound:
             ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
             ws.update([GSHEET_HEADER])
-        _GSHEET_STATUS = {
+        return ws, {
             "ok": True,
             "detail": f'Pripojene k Google Sheetu "{sh.title}", hárok "Holdings".',
         }
-        return ws
     except Exception as e:
-        _GSHEET_STATUS = {"ok": False, "detail": f"Chyba pripojenia: {type(e).__name__}: {e}"}
-        return None
+        return None, {"ok": False, "detail": f"Chyba pripojenia: {type(e).__name__}: {e}"}
 
 
 def load_holdings() -> dict:
-    ws = _get_gsheet_worksheet()
+    ws, status = _connect_gsheet()
+    st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
             records = ws.get_all_records()
@@ -199,8 +189,9 @@ def load_holdings() -> dict:
                 result[tkr] = {"qty": qty, "exchange": r.get("Exchange", "")}
             return result
         except Exception as e:
-            global _GSHEET_STATUS
-            _GSHEET_STATUS = {"ok": False, "detail": f"Chyba citania z Google Sheets: {type(e).__name__}: {e}"}
+            st.session_state["gsheet_status"] = {
+                "ok": False, "detail": f"Chyba citania z Google Sheets: {type(e).__name__}: {e}"
+            }
     # Zalozny lokalny subor - pouziva sa, ak Google Sheets nie je nastaveny
     # (typicky pri lokalnom spustani bez .streamlit/secrets.toml).
     if not HOLDINGS_FILE.exists():
@@ -214,8 +205,8 @@ def load_holdings() -> dict:
 
 
 def save_holdings(holdings: dict, exchanges: dict) -> None:
-    global _GSHEET_LAST_WRITE
-    ws = _get_gsheet_worksheet()
+    ws, status = _connect_gsheet()
+    st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
             rows = [GSHEET_HEADER] + [
@@ -223,20 +214,20 @@ def save_holdings(holdings: dict, exchanges: dict) -> None:
             ]
             ws.clear()
             ws.update(rows)
-            _GSHEET_LAST_WRITE = {
+            st.session_state["gsheet_last_write"] = {
                 "ok": True,
                 "detail": f"Ulozene do Google Sheets ({len(holdings)} pozicii) o "
                           f"{datetime.now().strftime('%H:%M:%S')}.",
             }
             return
         except Exception as e:
-            _GSHEET_LAST_WRITE = {
+            st.session_state["gsheet_last_write"] = {
                 "ok": False,
                 "detail": f"Zapis do Google Sheets ZLYHAL: {type(e).__name__}: {e}",
             }
             # pokracuje na lokalny zalozny zapis nizsie
     else:
-        _GSHEET_LAST_WRITE = {
+        st.session_state["gsheet_last_write"] = {
             "ok": False,
             "detail": "Google Sheets nie je pripojeny - ulozene len do lokalneho suboru.",
         }
@@ -599,16 +590,47 @@ st.markdown(
 # SEKCIA 2 - PRIDAT AKCIU
 # ============================================================
 
-if _GSHEET_STATUS["ok"]:
-    _status_line = f"💾 Ukladanie: **Google Sheets** ({_GSHEET_STATUS['detail']})"
+_gs_status = st.session_state.get(
+    "gsheet_status", {"ok": False, "detail": "Pripojenie sa este vykonava..."}
+)
+_gs_last_write = st.session_state.get("gsheet_last_write", {"ok": None, "detail": ""})
+
+if _gs_status["ok"]:
+    _status_line = f"💾 Ukladanie: **Google Sheets** ({_gs_status['detail']})"
 else:
-    _status_line = f"💾 Ukladanie: **lokalny subor** - Google Sheets nie je aktivny ({_GSHEET_STATUS['detail']})"
-if _GSHEET_LAST_WRITE["ok"] is False:
-    _status_line += f"  \n⚠️ Posledny zapis: {_GSHEET_LAST_WRITE['detail']}"
-elif _GSHEET_LAST_WRITE["ok"] is True:
-    _status_line += f"  \n✅ {_GSHEET_LAST_WRITE['detail']}"
-with st.expander("🔧 Diagnostika ukladania dat", expanded=not _GSHEET_STATUS["ok"]):
+    _status_line = f"💾 Ukladanie: **lokalny subor** - Google Sheets nie je aktivny ({_gs_status['detail']})"
+if _gs_last_write["ok"] is False:
+    _status_line += f"  \n⚠️ Posledny zapis: {_gs_last_write['detail']}"
+elif _gs_last_write["ok"] is True:
+    _status_line += f"  \n✅ {_gs_last_write['detail']}"
+
+with st.expander("🔧 Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_status_line)
+    st.caption(
+        "Pozn.: pripojenie na Google Sheets sa skusa len raz za bezanie appky (vykesovane). "
+        "Ak si prave zmenil opravnenia zdielania Sheetu, pouzij tlacidlo nizsie."
+    )
+    if st.button("🔄 Skusit pripojenie na Google Sheets znova"):
+        _connect_gsheet.clear()
+        st.rerun()
+    st.divider()
+    st.caption(
+        "Poistka pre pripad problemov: stiahni si aktualny stav portfolia ako JOSN subor "
+        "na svoj pocitac, kedykolvek chces."
+    )
+    st.download_button(
+        "📥 Stiahnut zalohu portfolia (JSON)",
+        data=json.dumps(
+            {
+                tkr: {"qty": qty, "exchange": st.session_state.holdings_exchange.get(tkr, "")}
+                for tkr, qty in st.session_state.holdings.items()
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        file_name=f"holdings_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+        mime="application/json",
+    )
 
 st.markdown("#### ➕ Pridat akciu")
 
