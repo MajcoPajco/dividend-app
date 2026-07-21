@@ -606,6 +606,14 @@ elif _gs_last_write["ok"] is True:
 
 with st.expander("🔧 Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_status_line)
+    try:
+        _secret_keys = list(st.secrets.keys())
+        st.caption(f"Kluce, ktore appka vidi v st.secrets (len nazvy, nie hodnoty): {_secret_keys}")
+        if "gcp_service_account" in _secret_keys:
+            _inner_keys = list(st.secrets["gcp_service_account"].keys())
+            st.caption(f"Kluce vnutri 'gcp_service_account': {_inner_keys}")
+    except Exception as _e:
+        st.caption(f"Nepodarilo sa precitat st.secrets: {type(_e).__name__}: {_e}")
     st.caption(
         "Pozn.: pripojenie na Google Sheets sa skusa len raz za bezanie appky (vykesovane). "
         "Ak si prave zmenil opravnenia zdielania Sheetu, pouzij tlacidlo nizsie."
