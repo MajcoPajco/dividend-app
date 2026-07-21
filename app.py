@@ -444,13 +444,14 @@ _FREQ_BADGE_CLASS = {
     "Stvrtrocne": "freq-quarterly",
     "Mesacne": "freq-monthly",
     "Rocne": "freq-yearly",
+    "Polrocne": "freq-semiannual",
 }
 
 
 def freq_badge_html(freq: str) -> str:
     """Zabali hodnotu frekvencie do farebneho odznaku (Stvrtrocne=modra,
-    Mesacne=zelena, Rocne=fialova). Ostatne hodnoty (Polrocne, Nepravidelne,
-    N/A) ostavaju bez farby."""
+    Mesacne=zelena, Rocne=fialova, Polrocne=jemna cervena). Ostatne hodnoty
+    (Nepravidelne, N/A) ostavaju bez farby."""
     cls = _FREQ_BADGE_CLASS.get(freq)
     if cls:
         return f'<span class="freq-badge {cls}">{freq}</span>'
@@ -473,7 +474,7 @@ def _normalize_yield_pct(raw) -> float | None:
     return val
 
 
-def _parse_stock_info(ticker: str, info: dict, dividends, hist=None) -> dict | None:
+def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
     price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
     if price is None:
         return None
@@ -513,12 +514,6 @@ def _parse_stock_info(ticker: str, info: dict, dividends, hist=None) -> dict | N
         dividend_yield_pct = _normalize_yield_pct(info.get("dividendYield"))
     if dividend_yield_pct is None:
         dividend_yield_pct = _normalize_yield_pct(info.get("trailingAnnualDividendYield"))
-    growth = {
-        "1m": _pct_change_over_period(hist, 30),
-        "6m": _pct_change_over_period(hist, 182),
-        "1y": _pct_change_over_period(hist, 365),
-        "5y": _pct_change_over_period(hist, 1825),
-    }
     return {
         "ticker": ticker,
         "name": name,
@@ -532,7 +527,25 @@ def _parse_stock_info(ticker: str, info: dict, dividends, hist=None) -> dict | N
         "annual_rate": annual_rate,
         "dividend_yield_pct": dividend_yield_pct,
         "frequency": frequency,
-        "growth": growth,
+    }
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _fetch_growth_data_cached(ticker: str) -> dict:
+    """Historicke ceny (na vypocet % rastu za 1M/6M/1R/5R) sa menia len raz
+    za den, preto maju vlastnu, oveľa dlhsiu cache (6 hodin) ako zvysok dat
+    (5 min) - inak by sa tento tazky vypocet opakoval prilis casto a
+    spomaloval kazdy pár-minutovy autorefresh stranky."""
+    t = yf.Ticker(ticker)
+    try:
+        hist = t.history(period="5y", interval="1d", auto_adjust=False)["Close"]
+    except Exception:
+        hist = None
+    return {
+        "1m": _pct_change_over_period(hist, 30),
+        "6m": _pct_change_over_period(hist, 182),
+        "1y": _pct_change_over_period(hist, 365),
+        "5y": _pct_change_over_period(hist, 1825),
     }
 
 
@@ -541,13 +554,10 @@ def _fetch_stock_data_cached(ticker: str) -> dict:
     t = yf.Ticker(ticker)
     info = t.info or {}
     dividends = t.dividends
-    try:
-        hist = t.history(period="5y", interval="1d")["Close"]
-    except Exception:
-        hist = None
-    rec = _parse_stock_info(ticker, info, dividends, hist)
+    rec = _parse_stock_info(ticker, info, dividends)
     if rec is None:
         raise _LookupMiss(f"no price data for {ticker}")
+    rec["growth"] = _fetch_growth_data_cached(ticker)
     return rec
 
 
@@ -587,6 +597,7 @@ BOARD_CSS = (
     ".freq-quarterly{background:#e7f0fe;color:#2f5fd6;}"
     ".freq-monthly{background:#e3f7ea;color:#1c9350;}"
     ".freq-yearly{background:#f2e9fb;color:#7c3fc9;}"
+    ".freq-semiannual{background:#fceceb;color:#c2453c;}"
     ".growth-pos{color:#15a24a;font-weight:600;}"
     ".growth-neg{color:#e0362b;font-weight:600;}"
     "</style>"
@@ -887,8 +898,26 @@ else:
         })
 
     holdings_df = pd.DataFrame(holdings_rows)
+
+    _growth_cols = ["Rast 1M [%]", "Rast 6M [%]", "Rast 1R [%]", "Rast 5R [%]"]
+
+    def _style_growth_cell(val):
+        if not isinstance(val, str):
+            return ""
+        if val.startswith("+"):
+            return "color: #15a24a; font-weight: 600;"
+        if val.startswith("-"):
+            return "color: #e0362b; font-weight: 600;"
+        return ""
+
+    try:
+        styled_holdings = holdings_df.style.map(_style_growth_cell, subset=_growth_cols)
+    except AttributeError:
+        # Starsie verzie pandas nemaju .map() na Styleri, len .applymap()
+        styled_holdings = holdings_df.style.applymap(_style_growth_cell, subset=_growth_cols)
+
     edited_df = st.data_editor(
-        holdings_df,
+        styled_holdings,
         column_config={
             "Ticker": st.column_config.TextColumn(disabled=True),
             "Meno firmy": st.column_config.TextColumn(disabled=True),
