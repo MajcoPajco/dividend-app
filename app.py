@@ -405,6 +405,23 @@ def estimate_dividend_frequency(dividends) -> str:
         return "Nepravidelne"
 
 
+_FREQ_BADGE_CLASS = {
+    "Stvrtrocne": "freq-quarterly",
+    "Mesacne": "freq-monthly",
+    "Rocne": "freq-yearly",
+}
+
+
+def freq_badge_html(freq: str) -> str:
+    """Zabali hodnotu frekvencie do farebneho odznaku (Stvrtrocne=modra,
+    Mesacne=zelena, Rocne=fialova). Ostatne hodnoty (Polrocne, Nepravidelne,
+    N/A) ostavaju bez farby."""
+    cls = _FREQ_BADGE_CLASS.get(freq)
+    if cls:
+        return f'<span class="freq-badge {cls}">{freq}</span>'
+    return freq
+
+
 def _normalize_yield_pct(raw) -> float | None:
     """Yahoo/yfinance vracia dividendYield niekedy ako zlomok (0.0557),
     inokedy uz ako percento (5.57) - zjednotime na percento."""
@@ -515,9 +532,15 @@ BOARD_CSS = (
     ".board td{padding:6px 16px;font-size:15px;letter-spacing:0.02em;white-space:nowrap;"
     "line-height:1.1;border-bottom:1px solid #f0f1f3;}"
     ".board tr:last-child td{border-bottom:none;}"
+    ".board tbody tr:hover td{background:#f2f5fa;}"
     ".row-open td{color:#15a24a;}"
     ".row-closed td{color:#e0362b;}"
     ".code-cell{font-weight:700;}"
+    ".freq-badge{display:inline-block;padding:2px 10px;border-radius:999px;"
+    "font-size:13px;font-weight:600;letter-spacing:0.01em;}"
+    ".freq-quarterly{background:#e7f0fe;color:#2f5fd6;}"
+    ".freq-monthly{background:#e3f7ea;color:#1c9350;}"
+    ".freq-yearly{background:#f2e9fb;color:#7c3fc9;}"
     "</style>"
 )
 st.markdown(BOARD_CSS, unsafe_allow_html=True)
@@ -913,7 +936,7 @@ else:
                 f'<td>{r["name"]}</td>'
                 f'<td>{format_qty(r["qty"])} ks</td>'
                 f'<td>{r["ex_date"].strftime("%d/%m/%y")}</td>'
-                f'<td>{r["frequency"]}</td>'
+                f'<td>{freq_badge_html(r["frequency"])}</td>'
                 f'<td>{last_div_str}</td>'
                 f'<td>{annual_div_str}</td>'
                 f'<td>{pct_last_str}</td>'
