@@ -620,6 +620,8 @@ with st.expander("🔧 Diagnostika ukladania dat", expanded=not _gs_status["ok"]
     )
     if st.button("🔄 Skusit pripojenie na Google Sheets znova"):
         _connect_gsheet.clear()
+        _, _fresh_status = _connect_gsheet()
+        st.session_state["gsheet_status"] = _fresh_status
         st.rerun()
     st.divider()
     st.caption(
