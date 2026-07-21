@@ -127,6 +127,41 @@ def format_qty(q: float) -> str:
     return s if s else "0"
 
 
+def _pct_change_over_period(hist, days_back: int):
+    """Vypocita % zmenu ceny za poslednych `days_back` dni na zaklade
+    historickych zavieracich cien (hist = pd.Series indexovany datumom)."""
+    if hist is None or len(hist) == 0:
+        return None
+    try:
+        last_date = hist.index[-1]
+        last_price = float(hist.iloc[-1])
+        target_date = last_date - timedelta(days=days_back)
+        past_price = hist.asof(target_date)
+        if past_price is None or (isinstance(past_price, float) and pd.isna(past_price)):
+            return None
+        past_price = float(past_price)
+        if past_price == 0:
+            return None
+        return (last_price - past_price) / past_price * 100
+    except Exception:
+        return None
+
+
+def format_growth(val) -> str:
+    if val is None:
+        return "N/A"
+    sign = "+" if val >= 0 else ""
+    return f"{sign}{val:.2f} %"
+
+
+def growth_cell_html(val) -> str:
+    """Formatuje % rast s farebnym zvyraznenim (zelena = rast, cervena = pokles)."""
+    if val is None:
+        return "N/A"
+    cls = "growth-pos" if val >= 0 else "growth-neg"
+    return f'<span class="{cls}">{format_growth(val)}</span>'
+
+
 HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
 GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
@@ -438,7 +473,7 @@ def _normalize_yield_pct(raw) -> float | None:
     return val
 
 
-def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
+def _parse_stock_info(ticker: str, info: dict, dividends, hist=None) -> dict | None:
     price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
     if price is None:
         return None
@@ -478,6 +513,12 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
         dividend_yield_pct = _normalize_yield_pct(info.get("dividendYield"))
     if dividend_yield_pct is None:
         dividend_yield_pct = _normalize_yield_pct(info.get("trailingAnnualDividendYield"))
+    growth = {
+        "1m": _pct_change_over_period(hist, 30),
+        "6m": _pct_change_over_period(hist, 182),
+        "1y": _pct_change_over_period(hist, 365),
+        "5y": _pct_change_over_period(hist, 1825),
+    }
     return {
         "ticker": ticker,
         "name": name,
@@ -491,6 +532,7 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
         "annual_rate": annual_rate,
         "dividend_yield_pct": dividend_yield_pct,
         "frequency": frequency,
+        "growth": growth,
     }
 
 
@@ -499,7 +541,11 @@ def _fetch_stock_data_cached(ticker: str) -> dict:
     t = yf.Ticker(ticker)
     info = t.info or {}
     dividends = t.dividends
-    rec = _parse_stock_info(ticker, info, dividends)
+    try:
+        hist = t.history(period="5y", interval="1d")["Close"]
+    except Exception:
+        hist = None
+    rec = _parse_stock_info(ticker, info, dividends, hist)
     if rec is None:
         raise _LookupMiss(f"no price data for {ticker}")
     return rec
@@ -541,6 +587,8 @@ BOARD_CSS = (
     ".freq-quarterly{background:#e7f0fe;color:#2f5fd6;}"
     ".freq-monthly{background:#e3f7ea;color:#1c9350;}"
     ".freq-yearly{background:#f2e9fb;color:#7c3fc9;}"
+    ".growth-pos{color:#15a24a;font-weight:600;}"
+    ".growth-neg{color:#e0362b;font-weight:600;}"
     "</style>"
 )
 st.markdown(BOARD_CSS, unsafe_allow_html=True)
@@ -808,6 +856,7 @@ else:
             price_str, name = "N/A", tkr
             exchange_str = st.session_state.holdings_exchange.get(tkr) or "N/A"
             country_str, div_rocne_str = "N/A", "N/A"
+            growth_strs = {"1m": "N/A", "6m": "N/A", "1y": "N/A", "5y": "N/A"}
         else:
             price_str = f"{rec['price']:.2f} {rec['currency']}".strip()
             name, exchange_str, country_str = rec["name"], rec["exchange"], rec["country"]
@@ -815,6 +864,13 @@ else:
             if rec.get("annual_rate") is not None and rec.get("price"):
                 pct_annual = (rec["annual_rate"] / rec["price"]) * 100
             div_rocne_str = f"{pct_annual:.2f} %" if pct_annual is not None else "N/A"
+            growth = rec.get("growth") or {}
+            growth_strs = {
+                "1m": format_growth(growth.get("1m")),
+                "6m": format_growth(growth.get("6m")),
+                "1y": format_growth(growth.get("1y")),
+                "5y": format_growth(growth.get("5y")),
+            }
 
         holdings_rows.append({
             "Ticker": tkr,
@@ -822,20 +878,13 @@ else:
             "Burza": exchange_str,
             "Stat": country_str,
             "Aktualna cena": price_str,
+            "Rast 1M [%]": growth_strs["1m"],
+            "Rast 6M [%]": growth_strs["6m"],
+            "Rast 1R [%]": growth_strs["1y"],
+            "Rast 5R [%]": growth_strs["5y"],
             "Div.Rocne[%]": div_rocne_str,
             "Mnozstvo": format_qty(qty),
         })
-
-    sort_choice = st.selectbox(
-        "Zoradit podla",
-        options=["Poradie pridania", "Ticker (A-Z)", "Ticker (Z-A)"],
-        key="moje_akcie_sort_choice",
-    )
-    if sort_choice == "Ticker (A-Z)":
-        holdings_rows.sort(key=lambda r: r["Ticker"])
-    elif sort_choice == "Ticker (Z-A)":
-        holdings_rows.sort(key=lambda r: r["Ticker"], reverse=True)
-    # "Poradie pridania" - ziadne zoradenie, ponecha sa povodne poradie pridania
 
     holdings_df = pd.DataFrame(holdings_rows)
     edited_df = st.data_editor(
@@ -846,6 +895,10 @@ else:
             "Burza": st.column_config.TextColumn(disabled=True),
             "Stat": st.column_config.TextColumn(disabled=True),
             "Aktualna cena": st.column_config.TextColumn(disabled=True),
+            "Rast 1M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 6M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 1R [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 5R [%]": st.column_config.TextColumn(disabled=True),
             "Div.Rocne[%]": st.column_config.TextColumn(disabled=True),
             "Mnozstvo": st.column_config.TextColumn(
                 help="Zadaj mnozstvo. Desatinnu ciarku mozes pouzit bodkou alebo ciarkou."
@@ -904,6 +957,7 @@ else:
             "pct_annual": pct_annual,
             "expected": expected,
             "currency": currency,
+            "growth": rec.get("growth") or {},
         })
 
     if not div_rows:
@@ -941,6 +995,8 @@ else:
                         usd_amount = r["expected"] * rate
                         expected_str += f" (~ USD {usd_amount:.2f})"
 
+            growth = r.get("growth") or {}
+
             div_row_parts.append(
                 '<tr>'
                 f'<td class="code-cell">{r["ticker"]}</td>'
@@ -948,6 +1004,10 @@ else:
                 f'<td>{format_qty(r["qty"])} ks</td>'
                 f'<td>{r["ex_date"].strftime("%d/%m/%y")}</td>'
                 f'<td>{freq_badge_html(r["frequency"])}</td>'
+                f'<td>{growth_cell_html(growth.get("1m"))}</td>'
+                f'<td>{growth_cell_html(growth.get("6m"))}</td>'
+                f'<td>{growth_cell_html(growth.get("1y"))}</td>'
+                f'<td>{growth_cell_html(growth.get("5y"))}</td>'
                 f'<td>{last_div_str}</td>'
                 f'<td>{annual_div_str}</td>'
                 f'<td>{pct_last_str}</td>'
@@ -959,7 +1019,8 @@ else:
         st.markdown(
             '<div class="board-wrap"><table class="board"><thead><tr>'
             '<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Ex-Div Date</th>'
-            '<th>Frekvencia</th><th>Dividenda/akcia</th><th>Rocna divi./akcia</th>'
+            '<th>Frekvencia</th><th>Rast 1M</th><th>Rast 6M</th><th>Rast 1R</th><th>Rast 5R</th>'
+            '<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>'
             '<th>% k cene</th><th>Div Yield</th><th>Ocak. vynos</th>'
             f'</tr></thead><tbody>{"".join(div_row_parts)}</tbody></table></div>',
             unsafe_allow_html=True,
