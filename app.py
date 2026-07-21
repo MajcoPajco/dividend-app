@@ -826,6 +826,17 @@ else:
             "Mnozstvo": format_qty(qty),
         })
 
+    sort_choice = st.selectbox(
+        "Zoradit podla",
+        options=["Poradie pridania", "Ticker (A-Z)", "Ticker (Z-A)"],
+        key="moje_akcie_sort_choice",
+    )
+    if sort_choice == "Ticker (A-Z)":
+        holdings_rows.sort(key=lambda r: r["Ticker"])
+    elif sort_choice == "Ticker (Z-A)":
+        holdings_rows.sort(key=lambda r: r["Ticker"], reverse=True)
+    # "Poradie pridania" - ziadne zoradenie, ponecha sa povodne poradie pridania
+
     holdings_df = pd.DataFrame(holdings_rows)
     edited_df = st.data_editor(
         holdings_df,
