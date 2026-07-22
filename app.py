@@ -127,15 +127,18 @@ def format_qty(q: float) -> str:
     return s if s else "0"
 
 
-def _pct_change_over_period(hist, days_back: int):
-    """Vypocita % zmenu ceny za poslednych `days_back` dni na zaklade
-    historickych zavieracich cien (hist = pd.Series indexovany datumom)."""
+def _pct_change_over_period(hist, months: int | None = None, years: int | None = None):
+    """Vypocita % zmenu ceny za kalendarne obdobie (X mesiacov alebo rokov
+    dozadu od posledneho datumu v historii) - rovnaka konvencia ako pouzivaju
+    bezne financne weby (Yahoo a pod.) pre '1M/3M/6M/1R/5R', namiesto priblizneho
+    pocitania dni."""
     if hist is None or len(hist) == 0:
         return None
     try:
         last_date = hist.index[-1]
         last_price = float(hist.iloc[-1])
-        target_date = last_date - timedelta(days=days_back)
+        offset = pd.DateOffset(years=years) if years else pd.DateOffset(months=months)
+        target_date = last_date - offset
         past_price = hist.asof(target_date)
         if past_price is None or (isinstance(past_price, float) and pd.isna(past_price)):
             return None
@@ -531,7 +534,7 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def _fetch_growth_data_cached(ticker: str) -> dict:
+def _fetch_growth_data_cached_v3(ticker: str) -> dict:
     """Historicke ceny (na vypocet % rastu za 1M/6M/1R/5R) sa menia len raz
     za den, preto maju vlastnu, oveľa dlhsiu cache (6 hodin) ako zvysok dat
     (5 min) - inak by sa tento tazky vypocet opakoval prilis casto a
@@ -542,11 +545,11 @@ def _fetch_growth_data_cached(ticker: str) -> dict:
     except Exception:
         hist = None
     return {
-        "1m": _pct_change_over_period(hist, 30),
-        "3m": _pct_change_over_period(hist, 91),
-        "6m": _pct_change_over_period(hist, 182),
-        "1y": _pct_change_over_period(hist, 365),
-        "5y": _pct_change_over_period(hist, 1825),
+        "1m": _pct_change_over_period(hist, months=1),
+        "3m": _pct_change_over_period(hist, months=3),
+        "6m": _pct_change_over_period(hist, months=6),
+        "1y": _pct_change_over_period(hist, years=1),
+        "5y": _pct_change_over_period(hist, years=5),
     }
 
 
@@ -558,7 +561,7 @@ def _fetch_stock_data_cached(ticker: str) -> dict:
     rec = _parse_stock_info(ticker, info, dividends)
     if rec is None:
         raise _LookupMiss(f"no price data for {ticker}")
-    rec["growth"] = _fetch_growth_data_cached(ticker)
+    rec["growth"] = _fetch_growth_data_cached_v3(ticker)
     return rec
 
 
