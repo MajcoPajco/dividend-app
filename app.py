@@ -137,21 +137,26 @@ def _pct_change_over_period(hist, months: int | None = None, years: int | None =
     try:
         last_date = hist.index[-1]
         last_price = float(hist.iloc[-1])
+        if pd.isna(last_price):
+            return None
         offset = pd.DateOffset(years=years) if years else pd.DateOffset(months=months)
         target_date = last_date - offset
         past_price = hist.asof(target_date)
         if past_price is None or (isinstance(past_price, float) and pd.isna(past_price)):
             return None
         past_price = float(past_price)
-        if past_price == 0:
+        if past_price == 0 or pd.isna(past_price):
             return None
-        return (last_price - past_price) / past_price * 100
+        result = (last_price - past_price) / past_price * 100
+        if pd.isna(result):
+            return None
+        return result
     except Exception:
         return None
 
 
 def format_growth(val) -> str:
-    if val is None:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
         return "N/A"
     sign = "+" if val >= 0 else ""
     return f"{sign}{val:.2f} %"
@@ -159,7 +164,7 @@ def format_growth(val) -> str:
 
 def growth_cell_html(val) -> str:
     """Formatuje % rast s farebnym zvyraznenim (zelena = rast, cervena = pokles)."""
-    if val is None:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
         return "N/A"
     cls = "growth-pos" if val >= 0 else "growth-neg"
     return f'<span class="{cls}">{format_growth(val)}</span>'
@@ -534,14 +539,19 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def _fetch_growth_data_cached_v3(ticker: str) -> dict:
-    """Historicke ceny (na vypocet % rastu za 1M/6M/1R/5R) sa menia len raz
+def _fetch_growth_data_cached_v4(ticker: str) -> dict:
+    """Historicke ceny (na vypocet % rastu za 1M/3M/6M/1R/5R) sa menia len raz
     za den, preto maju vlastnu, oveľa dlhsiu cache (6 hodin) ako zvysok dat
     (5 min) - inak by sa tento tazky vypocet opakoval prilis casto a
     spomaloval kazdy pár-minutovy autorefresh stranky."""
     t = yf.Ticker(ticker)
     try:
-        hist = t.history(period="5y", interval="1d", auto_adjust=False)["Close"]
+        # Stahujeme o rok viac (6y) nez najdlhsie potrebne obdobie (5y), aby
+        # cielovy datum pre vypocet "5R" mal vzdy dostatocnu rezervu pred
+        # zaciatkom stiahnutej historie (inak by asof() tesne pod hranicou
+        # okna nenasiel ziadnu hodnotu a vratil N/A aj tam, kde data su).
+        hist = t.history(period="6y", interval="1d", auto_adjust=False)["Close"]
+        hist = hist.dropna()
     except Exception:
         hist = None
     return {
@@ -561,7 +571,7 @@ def _fetch_stock_data_cached(ticker: str) -> dict:
     rec = _parse_stock_info(ticker, info, dividends)
     if rec is None:
         raise _LookupMiss(f"no price data for {ticker}")
-    rec["growth"] = _fetch_growth_data_cached_v3(ticker)
+    rec["growth"] = _fetch_growth_data_cached_v4(ticker)
     return rec
 
 
