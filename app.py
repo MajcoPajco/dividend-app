@@ -1,3 +1,9 @@
+
+
+
+
+  
+
 #import os
 #os.environ['HTTPS_PROXY'] = 'http://rb-proxy-de.bsh.corp.bshg.com:8080'
 #os.environ['HTTP_PROXY'] = 'http://rb-proxy-de.bsh.corp.bshg.com:8080'
@@ -482,7 +488,7 @@ def _normalize_yield_pct(raw) -> float | None:
     return val
 
 
-def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
+def _parse_stock_info(ticker: str, info: dict, dividends, calendar: dict) -> dict | None:
     price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
     if price is None:
         return None
@@ -494,13 +500,18 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
     last_div_amount = None
     if dividends is not None and len(dividends) > 0:
         last_div_amount = float(dividends.iloc[-1])
-    ex_div_date = None
-    ex_div_ts = info.get("exDividendDate")
-    if ex_div_ts:
-        try:
-            ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).date()
-        except Exception:
+
+    ex_div_date = info.get("exDividendDate")
+    if ex_div_date:
+       try:
+            ex_div_date = datetime.fromtimestamp(ex_div_date, tz=timezone.utc).date()
+       except Exception:
             ex_div_date = None
+
+    pay_date = None
+    if calendar and "Pay Date" in calendar and isinstance(calendar["Pay Date"], datetime):
+         pay_date = calendar["Pay Date"].date()
+
     annual_rate = info.get("dividendRate")
     if annual_rate is None and last_div_amount is not None:
         annual_rate = last_div_amount * 4
@@ -532,6 +543,7 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
         "country": country,
         "last_div_amount": last_div_amount,
         "ex_div_date": ex_div_date,
+        "pay_date": pay_date,
         "annual_rate": annual_rate,
         "dividend_yield_pct": dividend_yield_pct,
         "frequency": frequency,
@@ -568,7 +580,11 @@ def _fetch_stock_data_cached(ticker: str) -> dict:
     t = yf.Ticker(ticker)
     info = t.info or {}
     dividends = t.dividends
-    rec = _parse_stock_info(ticker, info, dividends)
+    try:
+        calendar = t.calendar.to_dict() if not t.calendar.empty else {}
+    except Exception:
+        calendar = {}
+    rec = _parse_stock_info(ticker, info, dividends, calendar)
     if rec is None:
         raise _LookupMiss(f"no price data for {ticker}")
     rec["growth"] = _fetch_growth_data_cached_v4(ticker)
@@ -969,7 +985,7 @@ else:
 # SEKCIA 4 - NAJBLIZZSIE EX-DIV DATUMY
 # ============================================================
 
-st.markdown("#### 📅 Najblizzsie Ex-Div datumy")
+st.markdown("#### 📅 Najblizsie Ex-Div datumy")
 
 if not st.session_state.holdings:
     st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad dividend.")
@@ -1072,3 +1088,76 @@ else:
             f'</tr></thead><tbody>{"".join(div_row_parts)}</tbody></table></div>',
             unsafe_allow_html=True,
         )
+
+# ============================================================
+# SEKCIA 5 - VYPLACANE DIVIDENDY
+# ============================================================
+
+st.markdown("#### 💰 Vyplácané dividendy")
+
+if not st.session_state.holdings:
+    st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad.")
+else:
+    today = datetime.now(timezone.utc).date()
+    payout_rows = []
+    for tkr, qty in st.session_state.holdings.items():
+        rec = stock_records.get(tkr)
+        if rec is None or rec.get("pay_date") is None:
+            continue
+        if rec["pay_date"] < today:
+            continue
+        
+        last_div = rec.get("last_div_amount")
+        total_payout = (last_div * qty) if (last_div is not None and qty is not None) else None
+        
+        payout_rows.append({
+            "ticker": tkr,
+            "name": rec.get("name", "N/A"),
+            "qty": qty,
+            "pay_date": rec["pay_date"],
+            "frequency": rec.get("frequency", "N/A"),
+            "last_div": last_div,
+            "total_payout": total_payout,
+            "currency": rec.get("currency", "")
+        })
+
+    if not payout_rows:
+        st.info("Žiadna z vlastnených akcií nemá aktuálne ohlásený budúci dátum výplaty dividendy.")
+    else:
+        payout_rows.sort(key=lambda r: r["pay_date"])
+        
+        payout_row_parts = []
+        for r in payout_rows:
+            div_per_share_str = f"{r['last_div']:.4f} {r['currency']}".strip() if r['last_div'] is not None else "N/A"
+            
+            total_payout_str = "N/A"
+            if r["total_payout"] is not None:
+                curr = r["currency"]
+                total_payout_str = f"{r['total_payout']:.2f} {curr}".strip()
+                is_usd = curr.upper() == "USD" if curr else True
+                if not is_usd:
+                    rate = get_fx_to_usd_rate(curr)
+                    if rate is not None:
+                        usd_amount = r["total_payout"] * rate
+                        total_payout_str += f" (~ USD {usd_amount:.2f})"
+
+            payout_row_parts.append(
+                '<tr>'
+                f'<td class="code-cell">{r["ticker"]}</td>'
+                f'<td>{r["name"]}</td>'
+                f'<td>{format_qty(r["qty"])}</td>'
+                f'<td>{r["pay_date"].strftime("%d/%m/%y")}</td>'
+                f'<td>{freq_badge_html(r["frequency"])}</td>'
+                f'<td>{div_per_share_str}</td>'
+                f'<td>{total_payout_str}</td>'
+                '</tr>'
+            )
+
+        st.markdown(
+            '<div class="board-wrap"><table class="board"><thead><tr>'
+            '<th>Ticker</th><th>Meno</th><th>Množstvo</th><th>Div Date</th>'
+            '<th>Frekvencia</th><th>Dividenda/akcia</th><th>Očakávaná dividenda</th>'
+            f'</tr></thead><tbody>{"".join(payout_row_parts)}</tbody></table></div>',
+            unsafe_allow_html=True,
+        )
+
