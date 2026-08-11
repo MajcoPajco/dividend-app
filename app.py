@@ -1017,7 +1017,6 @@ if _add_stock_msg:
 
 # ============================================================
 # SEKCIA 3 - MOJE AKCIE
-# Numericke stlpce ulozene ako float -> spravne zoradenie
 # ============================================================
 
 st.markdown("#### Moje akcie")
@@ -1111,44 +1110,28 @@ else:
     edited_df = st.data_editor(
         styled_holdings,
         column_config={
-            "Ticker": st.column_config.TextColumn(
-                disabled=True,
-            ),
-            "Meno firmy": st.column_config.TextColumn(
-                disabled=True,
-            ),
-            "Burza": st.column_config.TextColumn(
-                disabled=True,
-            ),
-            "Stat": st.column_config.TextColumn(
-                disabled=True,
-            ),
-            "Aktualna cena": st.column_config.TextColumn(
-                disabled=True,
-            ),
+            "Ticker": st.column_config.TextColumn(disabled=True),
+            "Meno firmy": st.column_config.TextColumn(disabled=True),
+            "Burza": st.column_config.TextColumn(disabled=True),
+            "Stat": st.column_config.TextColumn(disabled=True),
+            "Aktualna cena": st.column_config.TextColumn(disabled=True),
             "Rast 1M [%]": st.column_config.NumberColumn(
-                format="%.2f %%",
-                disabled=True,
+                format="%.2f %%", disabled=True,
             ),
             "Rast 3M [%]": st.column_config.NumberColumn(
-                format="%.2f %%",
-                disabled=True,
+                format="%.2f %%", disabled=True,
             ),
             "Rast 6M [%]": st.column_config.NumberColumn(
-                format="%.2f %%",
-                disabled=True,
+                format="%.2f %%", disabled=True,
             ),
             "Rast 1R [%]": st.column_config.NumberColumn(
-                format="%.2f %%",
-                disabled=True,
+                format="%.2f %%", disabled=True,
             ),
             "Rast 5R [%]": st.column_config.NumberColumn(
-                format="%.2f %%",
-                disabled=True,
+                format="%.2f %%", disabled=True,
             ),
             "Div.Rocne[%]": st.column_config.NumberColumn(
-                format="%.2f %%",
-                disabled=True,
+                format="%.2f %%", disabled=True,
             ),
             "Mnozstvo": st.column_config.NumberColumn(
                 format="%.4f",
@@ -1179,7 +1162,7 @@ else:
 
 # ============================================================
 # SEKCIA 4 - NAJBLIZZSIE EX-DIV DATUMY
-# Hodnoty vzdy pre 1 akciu. Limit 30 riadkov.
+# Hodnoty vzdy pre 1 akciu. Limit 40 riadkov.
 # ============================================================
 
 st.markdown("#### Najblizzsie Ex-Div datumy")
@@ -1228,7 +1211,8 @@ else:
         )
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
-        div_rows = div_rows[:30]
+        # ── ZMENENE: limit zvyseny z 30 na 40 riadkov ──
+        div_rows = div_rows[:40]
         div_row_parts = []
         for r in div_rows:
             if r["last_div"] is not None:
