@@ -128,10 +128,6 @@ def format_qty(q: float) -> str:
 
 
 def _pct_change_over_period(hist, months: int | None = None, years: int | None = None):
-    """Vypocita % zmenu ceny za kalendarne obdobie (X mesiacov alebo rokov
-    dozadu od posledneho datumu v historii) - rovnaka konvencia ako pouzivaju
-    bezne financne weby (Yahoo a pod.) pre '1M/3M/6M/1R/5R', namiesto priblizneho
-    pocitania dni."""
     if hist is None or len(hist) == 0:
         return None
     try:
@@ -163,7 +159,6 @@ def format_growth(val) -> str:
 
 
 def growth_cell_html(val) -> str:
-    """Formatuje % rast s farebnym zvyraznenim (zelena = rast, cervena = pokles)."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return "N/A"
     cls = "growth-pos" if val >= 0 else "growth-neg"
@@ -176,11 +171,6 @@ GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
 @st.cache_resource(show_spinner=False)
 def _connect_gsheet():
-    """Pripoji sa na Google Sheet a vrati (worksheet_or_None, status_dict).
-    Vysledok je vykesovany (cache_resource) naprieč vsetkymi reláciami appky,
-    takze sa realne pripojenie skusi len raz - ale status sa vzdy vracia
-    SPOLU s vysledkom, takze sa spravne zobrazuje aj pri cache hit (na rozdiel
-    od samostatnej globalnej premennej, ktora by sa medzi behmi resetovala)."""
     if gspread is None or _GoogleCredentials is None:
         return None, {
             "ok": False,
@@ -235,8 +225,6 @@ def load_holdings() -> dict:
             st.session_state["gsheet_status"] = {
                 "ok": False, "detail": f"Chyba citania z Google Sheets: {type(e).__name__}: {e}"
             }
-    # Zalozny lokalny subor - pouziva sa, ak Google Sheets nie je nastaveny
-    # (typicky pri lokalnom spustani bez .streamlit/secrets.toml).
     if not HOLDINGS_FILE.exists():
         return {}
     try:
@@ -268,13 +256,11 @@ def save_holdings(holdings: dict, exchanges: dict) -> None:
                 "ok": False,
                 "detail": f"Zapis do Google Sheets ZLYHAL: {type(e).__name__}: {e}",
             }
-            # pokracuje na lokalny zalozny zapis nizsie
     else:
         st.session_state["gsheet_last_write"] = {
             "ok": False,
             "detail": "Google Sheets nie je pripojeny - ulozene len do lokalneho suboru.",
         }
-    # Zalozny lokalny subor
     data = {
         tkr: {"qty": qty, "exchange": exchanges.get(tkr, "")}
         for tkr, qty in holdings.items()
@@ -313,16 +299,6 @@ def format_delta(delta: timedelta) -> str:
 
 
 class _LookupMiss(Exception):
-    """Interna vynimka na oznacenie neuspesneho vyhladania.
-
-    Doleziite: st.cache_data cachuje len uspesne (return) hodnoty, nie
-    vynimky. Ak by sme pri zlyhani vratili None/False, Streamlit by si
-    tento neuspech ulozil do cache na cely TTL (5 min / 1 hod) a dalsie
-    pokusy by ani neskusili siahnut na Yahoo znova - presne toto sposobovalo,
-    ze po jednom zlyhanom (napr. docasne zahltenom/rate-limitovanom) pokuse
-    appka "natvrdo" hlasila "nenajdene" aj ked by dalsi pokus uz uspel.
-    Vyhodenim vynimky sa neuspech necachuje a kazdy dalsi klik to skusi znova.
-    """
     pass
 
 
@@ -370,15 +346,6 @@ def _lookup_isin_by_ticker_cached(ticker_clean: str) -> str:
 
 
 def lookup_isin_by_ticker(ticker: str) -> str | None:
-    """Pokusi sa najst ISIN kod na zaklade tickeru (cez yfinance).
-
-    Poznamka: Yahoo/yfinance nema oficialne API pre smer ticker -> ISIN.
-    yfinance to interne riesi experimentalnym vyhladavanim nazvu firmy na
-    Business Insideri, co sa nemusi podarit uplne pre kazdy ticker (chyba
-    zhoda vo formate, titul tam nie je uvedeny a pod.) - to je limit
-    externeho zdroja dat, nie chyba tejto appky. Ak sa ISIN nenajde, akciu
-    je stale mozne pridat len podla tickeru.
-    """
     ticker_clean = (ticker or "").strip().upper()
     if not ticker_clean:
         return None
@@ -394,7 +361,6 @@ def _lookup_ticker_by_isin_cached(isin_clean: str) -> dict:
     quotes = search.quotes or []
     if not quotes:
         raise _LookupMiss(f"no quotes for {isin_clean}")
-    # Preferuj akcie/ETF pred inymi typmi vysledkov (napr. options, futures)
     preferred = [q for q in quotes if q.get("quoteType") in ("EQUITY", "ETF")]
     best = (preferred or quotes)[0]
     symbol = best.get("symbol")
@@ -408,14 +374,6 @@ def _lookup_ticker_by_isin_cached(isin_clean: str) -> dict:
 
 
 def lookup_ticker_by_isin(isin: str) -> dict | None:
-    """Pokusi sa najst ticker symbol na zaklade ISIN kodu (cez Yahoo Finance search).
-
-    Poznamka: Yahoo dnes vyzaduje pre svoje API platny "crumb" + cookie session
-    (bez toho vracia 401 Unauthorized). Priamy `requests.get` na search endpoint
-    tuto autentifikaciu nemal, preto vzdy zlyhaval. yfinance.Search si crumb/cookie
-    session zaladuje a spravuje sam (tou istou session, ktoru uz aj tak pouziva
-    zvysok appky pre .info a dividendy), takze pouzivame ju namiesto ruceho requestu.
-    """
     isin_clean = (isin or "").strip().upper()
     if not isin_clean:
         return None
@@ -457,9 +415,6 @@ _FREQ_BADGE_CLASS = {
 
 
 def freq_badge_html(freq: str) -> str:
-    """Zabali hodnotu frekvencie do farebneho odznaku (Stvrtrocne=modra,
-    Mesacne=zelena, Rocne=fialova, Polrocne=jemna cervena). Ostatne hodnoty
-    (Nepravidelne, N/A) ostavaju bez farby."""
     cls = _FREQ_BADGE_CLASS.get(freq)
     if cls:
         return f'<span class="freq-badge {cls}">{freq}</span>'
@@ -467,8 +422,6 @@ def freq_badge_html(freq: str) -> str:
 
 
 def _normalize_yield_pct(raw) -> float | None:
-    """Yahoo/yfinance vracia dividendYield niekedy ako zlomok (0.0557),
-    inokedy uz ako percento (5.57) - zjednotime na percento."""
     if raw is None:
         return None
     try:
@@ -501,9 +454,6 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
             ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).date()
         except Exception:
             ex_div_date = None
-    # "dividendDate" = ofiacilne ohlaseny/ocakavany datum VYPLATY dividendy
-    # (na rozdiel od "exDividendDate", ktory je datum EX-DIV). Yahoo tento
-    # udaj poskytuje len ak je pre najblizsiu splatku uz oficialne znamy.
     pay_div_date = None
     pay_div_ts = info.get("dividendDate")
     if pay_div_ts:
@@ -514,10 +464,6 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
     annual_rate = info.get("dividendRate")
     if annual_rate is None and last_div_amount is not None:
         annual_rate = last_div_amount * 4
-    # Yahoo GBp/GBP mixup: LSE tituly su kotovane v pencoch (mena "GBp"), ale
-    # Yahoo niekedy vracia "dividendRate" v librach (GBP) namiesto pencov -
-    # chyba faktora 100. Ak by rocna dividenda vysla mensia ako uz vyplatena
-    # jedna splatka, ide presne o tento pripad.
     if (
         currency == "GBp"
         and annual_rate is not None
@@ -551,16 +497,8 @@ def _parse_stock_info(ticker: str, info: dict, dividends) -> dict | None:
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def _fetch_growth_data_cached_v4(ticker: str) -> dict:
-    """Historicke ceny (na vypocet % rastu za 1M/3M/6M/1R/5R) sa menia len raz
-    za den, preto maju vlastnu, oveľa dlhsiu cache (6 hodin) ako zvysok dat
-    (5 min) - inak by sa tento tazky vypocet opakoval prilis casto a
-    spomaloval kazdy pár-minutovy autorefresh stranky."""
     t = yf.Ticker(ticker)
     try:
-        # Stahujeme o rok viac (6y) nez najdlhsie potrebne obdobie (5y), aby
-        # cielovy datum pre vypocet "5R" mal vzdy dostatocnu rezervu pred
-        # zaciatkom stiahnutej historie (inak by asof() tesne pod hranicou
-        # okna nenasiel ziadnu hodnotu a vratil N/A aj tam, kde data su).
         hist = t.history(period="6y", interval="1d", auto_adjust=False)["Close"]
         hist = hist.dropna()
     except Exception:
@@ -707,9 +645,11 @@ if _gs_status["ok"]:
 else:
     _status_line = f"💾 Ukladanie: **lokalny subor** - Google Sheets nie je aktivny ({_gs_status['detail']})"
 if _gs_last_write["ok"] is False:
-    _status_line += f"  \n⚠️ Posledny zapis: {_gs_last_write['detail']}"
+    _status_line += f"  
+⚠️ Posledny zapis: {_gs_last_write['detail']}"
 elif _gs_last_write["ok"] is True:
-    _status_line += f"  \n✅ {_gs_last_write['detail']}"
+    _status_line += f"  
+✅ {_gs_last_write['detail']}"
 
 with st.expander("🔧 Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_status_line)
@@ -781,7 +721,6 @@ def _on_add_stock_click() -> None:
     isin_clean = (st.session_state.get("add_isin_field") or "").strip().upper()
     qty_val = st.session_state.get("add_qty_field")
 
-    # Ak ticker chyba, ale ISIN je vyplneny, skus este raz dotiahnut ticker z ISIN.
     if not ticker_clean and isin_clean:
         info = lookup_ticker_by_isin(isin_clean)
         if info:
@@ -836,7 +775,6 @@ def _on_add_stock_click() -> None:
             )
         save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
 
-    # Po uspesnom pridani/odobrati vycisti vsetky polia.
     st.session_state["add_ticker_field"] = ""
     st.session_state["add_isin_field"] = ""
     st.session_state["add_qty_field"] = None
@@ -940,7 +878,6 @@ else:
     try:
         styled_holdings = holdings_df.style.map(_style_growth_cell, subset=_growth_cols)
     except AttributeError:
-        # Starsie verzie pandas nemaju .map() na Styleri, len .applymap()
         styled_holdings = holdings_df.style.applymap(_style_growth_cell, subset=_growth_cols)
 
     edited_df = st.data_editor(
@@ -978,6 +915,8 @@ else:
 
 # ============================================================
 # SEKCIA 4 - NAJBLIZZSIE EX-DIV DATUMY
+# Zobrazuje hodnoty vzdy pre 1 akciu (bez ohladu na drzane mnozstvo).
+# Obmedzene na max. 30 riadkov.
 # ============================================================
 
 st.markdown("#### 📅 Najblizzsie Ex-Div datumy")
@@ -1001,11 +940,11 @@ else:
         pct_annual = rec.get("dividend_yield_pct")
         if pct_annual is None:
             pct_annual = (annual_rate / price * 100) if (annual_rate is not None and price) else None
-        expected = (last_div * qty) if last_div is not None else None
+        # Ocakavany vynos vzdy pre 1 akciu (nie pre cely drzany pocet)
+        expected = last_div if last_div is not None else None
         div_rows.append({
             "ticker": tkr,
             "name": rec["name"],
-            "qty": qty,
             "ex_date": rec["ex_div_date"],
             "frequency": rec["frequency"],
             "last_div": last_div,
@@ -1021,6 +960,8 @@ else:
         st.info("Ziadna z pridanych akcii nema aktualne oficialne oznameny buduci Ex-Div datum.")
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
+        # Obmedzenie na 30 riadkov
+        div_rows = div_rows[:30]
         div_row_parts = []
         for r in div_rows:
             last_div_str = (
@@ -1040,17 +981,17 @@ else:
                     if rate_a is not None:
                         annual_div_str += f" (~ USD {r['annual_rate'] * rate_a:.2f})"
 
+            # Ocakavany vynos pre 1 akciu
             expected_str = "N/A"
             if r["expected"] is not None:
                 curr = r["currency"]
-                expected_str = f"{r['expected']:.2f} {curr}".strip()
-                # Prepocet na USD pre vsetky meny okrem USD (vratane GBp)
+                expected_str = f"{r['expected']:.4f} {curr}".strip()
                 is_usd = curr.upper() == "USD" if curr else True
                 if not is_usd:
                     rate = get_fx_to_usd_rate(curr)
                     if rate is not None:
                         usd_amount = r["expected"] * rate
-                        expected_str += f" (~ USD {usd_amount:.2f})"
+                        expected_str += f" (~ USD {usd_amount:.4f})"
 
             growth = r.get("growth") or {}
 
@@ -1058,7 +999,7 @@ else:
                 '<tr>'
                 f'<td class="code-cell">{r["ticker"]}</td>'
                 f'<td>{r["name"]}</td>'
-                f'<td>{format_qty(r["qty"])} ks</td>'
+                f'<td>1 ks</td>'
                 f'<td>{r["ex_date"].strftime("%d/%m/%y")}</td>'
                 f'<td>{freq_badge_html(r["frequency"])}</td>'
                 f'<td>{growth_cell_html(growth.get("1m"))}</td>'
@@ -1079,13 +1020,17 @@ else:
             '<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Ex-Div Date</th>'
             '<th>Frekvencia</th><th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th><th>Rast 1R</th><th>Rast 5R</th>'
             '<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>'
-            '<th>% k cene</th><th>Div Yield</th><th>Ocak. vynos</th>'
+            '<th>% k cene</th><th>Div Yield</th><th>Ocak. vynos/akcia</th>'
             f'</tr></thead><tbody>{"".join(div_row_parts)}</tbody></table></div>',
             unsafe_allow_html=True,
         )
 
 # ============================================================
 # SEKCIA 5 - VYPLACANE DIVIDENDY
+# Zobrazuje akcie s oficialne ohlasenym datumom vyplaty dividendy
+# od dnesneho datumu do buducnosti. Obmedzene na max. 30 riadkov.
+# Stlpce: Ticker, Meno, Mnozstvo, Div Date, Frekvencia,
+#         Rocny Div Yield, Dividenda/akcia, Dividenda/spolu
 # ============================================================
 
 st.markdown("#### 💰 Vyplacane dividendy")
@@ -1099,11 +1044,18 @@ else:
         rec = stock_records.get(tkr)
         if rec is None or rec.get("pay_div_date") is None:
             continue
+        # Zobrazujeme iba buduci alebo dnesny datum vyplaty
         if rec["pay_div_date"] < today_pay:
             continue
         price = rec["price"]
         last_div = rec["last_div_amount"]
+        annual_rate = rec["annual_rate"]
         currency = rec["currency"]
+        # Rocny dividend yield
+        pct_annual = rec.get("dividend_yield_pct")
+        if pct_annual is None:
+            pct_annual = (annual_rate / price * 100) if (annual_rate is not None and price) else None
+        # Celkova dividenda pre drzany pocet akcii
         total_div = (last_div * qty) if last_div is not None else None
         pay_rows.append({
             "ticker": tkr,
@@ -1111,6 +1063,7 @@ else:
             "qty": qty,
             "pay_date": rec["pay_div_date"],
             "frequency": rec["frequency"],
+            "pct_annual": pct_annual,
             "last_div": last_div,
             "total_div": total_div,
             "currency": currency,
@@ -1120,13 +1073,20 @@ else:
         st.info("Ziadna z pridanych akcii nema aktualne oficialne oznameny buduci datum vyplaty dividendy.")
     else:
         pay_rows.sort(key=lambda r: r["pay_date"])
+        # Obmedzenie na 30 riadkov
+        pay_rows = pay_rows[:30]
         pay_row_parts = []
         for r in pay_rows:
+            # Rocny dividend yield
+            pct_annual_str = f"{r['pct_annual']:.2f} %" if r["pct_annual"] is not None else "N/A"
+
+            # Dividenda na jednu akciu
             last_div_str = (
                 f"{r['last_div']:.4f} {r['currency']}".strip()
                 if r["last_div"] is not None else "N/A"
             )
 
+            # Dividenda spolu pre drzany pocet akcii (s prepoctom na USD pre non-USD meny)
             total_div_str = "N/A"
             if r["total_div"] is not None:
                 curr = r["currency"]
@@ -1145,6 +1105,7 @@ else:
                 f'<td>{format_qty(r["qty"])} ks</td>'
                 f'<td>{r["pay_date"].strftime("%d/%m/%y")}</td>'
                 f'<td>{freq_badge_html(r["frequency"])}</td>'
+                f'<td>{pct_annual_str}</td>'
                 f'<td>{last_div_str}</td>'
                 f'<td>{total_div_str}</td>'
                 '</tr>'
@@ -1153,7 +1114,8 @@ else:
         st.markdown(
             '<div class="board-wrap"><table class="board"><thead><tr>'
             '<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Div Date</th>'
-            '<th>Frekvencia</th><th>Dividenda/akcia</th><th>Spolu (drzane mnozstvo)</th>'
+            '<th>Frekvencia</th><th>Rocny Div Yield</th>'
+            '<th>Dividenda/akcia</th><th>Dividenda/spolu</th>'
             f'</tr></thead><tbody>{"".join(pay_row_parts)}</tbody></table></div>',
             unsafe_allow_html=True,
         )
