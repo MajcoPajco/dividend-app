@@ -16,7 +16,7 @@ except Exception:
 
 try:
     from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=60_000, limit=None, key="autorefresh")
+    st_autorefresh(interval=600_000, limit=None, key="autorefresh")
 except Exception:
     pass
 
@@ -623,7 +623,7 @@ def _fetch_growth_data_cached_v4(ticker):
     }
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def _fetch_stock_data_cached(ticker):
     t = yf.Ticker(ticker)
     info = t.info or {}
@@ -797,7 +797,9 @@ if _lw_ok is False:
 elif _lw_ok is True:
     _status_line += "  " + _NL + _lw_detail
 
-with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
+with st.expander(
+    "Diagnostika ukladania dat", expanded=not _gs_status["ok"]
+):
     st.markdown(_status_line)
     st.caption(
         "Pozn.: pripojenie na GSheets sa skusa len raz za bezanie "
@@ -1039,7 +1041,9 @@ else:
             }
         else:
             price_str = (
-                "{:.2f} {}".format(rec["price"], rec["currency"]).strip()
+                "{:.2f} {}".format(
+                    rec["price"], rec["currency"]
+                ).strip()
             )
             name = rec["name"]
             exchange_str = rec["exchange"]
@@ -1099,7 +1103,7 @@ else:
             _style_growth_cell, subset=_growth_cols
         )
 
-    # ── 20 riadkov × 35 px + hlavicka 38 px = 738 px ──
+    # 20 riadkov x 35px + hlavicka 38px = 738px
     edited_df = st.data_editor(
         styled_holdings,
         column_config={
@@ -1147,7 +1151,9 @@ else:
 st.markdown("#### Najblizzsie Ex-Div datumy")
 
 if not st.session_state.holdings:
-    st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad dividend.")
+    st.info(
+        "Pridaj akcie vyssie, aby sa tu zobrazil prehlad dividend."
+    )
 else:
     today = datetime.now(timezone.utc).date()
     div_rows = []
@@ -1199,21 +1205,20 @@ else:
                 )
             else:
                 last_div_str = "N/A"
-
             if r["pct_last"] is not None:
                 pct_last_str = "{:.2f} %".format(r["pct_last"])
             else:
                 pct_last_str = "N/A"
-
             if r["pct_annual"] is not None:
                 pct_annual_str = "{:.2f} %".format(r["pct_annual"])
             else:
                 pct_annual_str = "N/A"
-
             if r["annual_rate"] is not None:
                 curr = r["currency"]
                 annual_div_str = (
-                    "{:.4f} {}".format(r["annual_rate"], curr).strip()
+                    "{:.4f} {}".format(
+                        r["annual_rate"], curr
+                    ).strip()
                 )
                 _is_usd = curr.upper() == "USD" if curr else True
                 if not _is_usd:
@@ -1225,11 +1230,12 @@ else:
                         )
             else:
                 annual_div_str = "N/A"
-
             if r["expected"] is not None:
                 curr = r["currency"]
                 expected_str = (
-                    "{:.4f} {}".format(r["expected"], curr).strip()
+                    "{:.4f} {}".format(
+                        r["expected"], curr
+                    ).strip()
                 )
                 _is_usd2 = curr.upper() == "USD" if curr else True
                 if not _is_usd2:
@@ -1241,7 +1247,6 @@ else:
                         )
             else:
                 expected_str = "N/A"
-
             growth = r.get("growth") or {}
             _cells = [
                 "<tr>",
@@ -1338,7 +1343,6 @@ else:
                 pct_annual_str = "{:.2f} %".format(r["pct_annual"])
             else:
                 pct_annual_str = "N/A"
-
             if r["last_div"] is not None:
                 last_div_str = (
                     "{:.4f} {}".format(
@@ -1347,7 +1351,6 @@ else:
                 )
             else:
                 last_div_str = "N/A"
-
             if r["total_div"] is not None:
                 curr = r["currency"]
                 total_div_str = (
@@ -1363,7 +1366,6 @@ else:
                         )
             else:
                 total_div_str = "N/A"
-
             _pcells = [
                 "<tr>",
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>",
