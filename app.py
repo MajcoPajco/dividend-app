@@ -1,7 +1,3 @@
-#import os
-#os.environ['HTTPS_PROXY'] = 'http://rb-proxy-de.bsh.corp.bshg.com:8080'
-#os.environ['HTTP_PROXY'] = 'http://rb-proxy-de.bsh.corp.bshg.com:8080'
-
 import json
 from pathlib import Path
 import streamlit as st
@@ -33,84 +29,151 @@ st.set_page_config(
 BRATISLAVA_TZ = ZoneInfo("Europe/Bratislava")
 
 EXCHANGES = [
-    {"name": "New York Stock Exchange", "code": "NYSE", "city": "New York", "country": "USA",
-     "tz": "America/New_York", "open": "09:30", "close": "16:00", "flag": "🇺🇸"},
-    {"name": "NASDAQ", "code": "NASDAQ", "city": "New York", "country": "USA",
-     "tz": "America/New_York", "open": "09:30", "close": "16:00", "flag": "🇺🇸"},
-    {"name": "Toronto Stock Exchange", "code": "TSX", "city": "Toronto", "country": "Kanada",
-     "tz": "America/Toronto", "open": "09:30", "close": "16:00", "flag": "🇨🇦"},
-    {"name": "London Stock Exchange", "code": "LSE", "city": "Londyn", "country": "Spojene kralovstvo",
-     "tz": "Europe/London", "open": "08:00", "close": "16:30", "flag": "🇬🇧"},
-    {"name": "Euronext Paris", "code": "EPA", "city": "Pariz", "country": "Francuzsko",
-     "tz": "Europe/Paris", "open": "09:00", "close": "17:30", "flag": "🇫🇷"},
-    {"name": "Deutsche Boerse (Xetra)", "code": "FRA", "city": "Frankfurt", "country": "Nemecko",
-     "tz": "Europe/Berlin", "open": "09:00", "close": "17:30", "flag": "🇩🇪"},
-    {"name": "SIX Swiss Exchange", "code": "SIX", "city": "Zurich", "country": "Svajciarsko",
-     "tz": "Europe/Zurich", "open": "09:00", "close": "17:30", "flag": "🇨🇭"},
-    {"name": "Tokyo Stock Exchange", "code": "TSE", "city": "Tokio", "country": "Japonsko",
-     "tz": "Asia/Tokyo", "open": "09:00", "close": "15:00", "flag": "🇯🇵"},
-    {"name": "Hong Kong Stock Exchange", "code": "HKEX", "city": "Hongkong", "country": "Cina",
-     "tz": "Asia/Hong_Kong", "open": "09:30", "close": "16:00", "flag": "🇭🇰"},
-    {"name": "Shanghai Stock Exchange", "code": "SSE", "city": "Sanghaj", "country": "Cina",
-     "tz": "Asia/Shanghai", "open": "09:30", "close": "15:00", "flag": "🇨🇳"},
-    {"name": "Bombay Stock Exchange", "code": "BSE", "city": "Bombaj", "country": "India",
-     "tz": "Asia/Kolkata", "open": "09:15", "close": "15:30", "flag": "🇮🇳"},
-    {"name": "Australian Securities Exchange", "code": "ASX", "city": "Sydney", "country": "Australia",
-     "tz": "Australia/Sydney", "open": "10:00", "close": "16:00", "flag": "🇦🇺"},
+    {"name": "New York Stock Exchange", "code": "NYSE",
+     "city": "New York", "country": "USA",
+     "tz": "America/New_York", "open": "09:30", "close": "16:00",
+     "flag": "🇺🇸"},
+    {"name": "NASDAQ", "code": "NASDAQ",
+     "city": "New York", "country": "USA",
+     "tz": "America/New_York", "open": "09:30", "close": "16:00",
+     "flag": "🇺🇸"},
+    {"name": "Toronto Stock Exchange", "code": "TSX",
+     "city": "Toronto", "country": "Kanada",
+     "tz": "America/Toronto", "open": "09:30", "close": "16:00",
+     "flag": "🇨🇦"},
+    {"name": "London Stock Exchange", "code": "LSE",
+     "city": "Londyn", "country": "Spojene kralovstvo",
+     "tz": "Europe/London", "open": "08:00", "close": "16:30",
+     "flag": "🇬🇧"},
+    {"name": "Euronext Paris", "code": "EPA",
+     "city": "Pariz", "country": "Francuzsko",
+     "tz": "Europe/Paris", "open": "09:00", "close": "17:30",
+     "flag": "🇫🇷"},
+    {"name": "Deutsche Boerse (Xetra)", "code": "FRA",
+     "city": "Frankfurt", "country": "Nemecko",
+     "tz": "Europe/Berlin", "open": "09:00", "close": "17:30",
+     "flag": "🇩🇪"},
+    {"name": "SIX Swiss Exchange", "code": "SIX",
+     "city": "Zurich", "country": "Svajciarsko",
+     "tz": "Europe/Zurich", "open": "09:00", "close": "17:30",
+     "flag": "🇨🇭"},
+    {"name": "Tokyo Stock Exchange", "code": "TSE",
+     "city": "Tokio", "country": "Japonsko",
+     "tz": "Asia/Tokyo", "open": "09:00", "close": "15:00",
+     "flag": "🇯🇵"},
+    {"name": "Hong Kong Stock Exchange", "code": "HKEX",
+     "city": "Hongkong", "country": "Cina",
+     "tz": "Asia/Hong_Kong", "open": "09:30", "close": "16:00",
+     "flag": "🇭🇰"},
+    {"name": "Shanghai Stock Exchange", "code": "SSE",
+     "city": "Sanghaj", "country": "Cina",
+     "tz": "Asia/Shanghai", "open": "09:30", "close": "15:00",
+     "flag": "🇨🇳"},
+    {"name": "Bombay Stock Exchange", "code": "BSE",
+     "city": "Bombaj", "country": "India",
+     "tz": "Asia/Kolkata", "open": "09:15", "close": "15:30",
+     "flag": "🇮🇳"},
+    {"name": "Australian Securities Exchange", "code": "ASX",
+     "city": "Sydney", "country": "Australia",
+     "tz": "Australia/Sydney", "open": "10:00", "close": "16:00",
+     "flag": "🇦🇺"},
 ]
 
 EXTRA_MARKETS_BY_CODE = {
-    "OSL": {"name": "Oslo Bors", "code": "OSL", "city": "Oslo", "country": "Norsko",
-            "tz": "Europe/Oslo", "open": "09:00", "close": "16:25", "flag": "🇳🇴"},
-    "STO": {"name": "Nasdaq Stockholm", "code": "STO", "city": "Stokholm", "country": "Svedsko",
-            "tz": "Europe/Stockholm", "open": "09:00", "close": "17:25", "flag": "🇸🇪"},
-    "HEL": {"name": "Nasdaq Helsinki", "code": "HEL", "city": "Helsinki", "country": "Finsko",
-            "tz": "Europe/Helsinki", "open": "10:00", "close": "18:30", "flag": "🇫🇮"},
-    "CPH": {"name": "Nasdaq Copenhagen", "code": "CPH", "city": "Kodan", "country": "Dansko",
-            "tz": "Europe/Copenhagen", "open": "09:00", "close": "17:00", "flag": "🇩🇰"},
-    "MIL": {"name": "Borsa Italiana", "code": "MIL", "city": "Milano", "country": "Taliansko",
-            "tz": "Europe/Rome", "open": "09:00", "close": "17:30", "flag": "🇮🇹"},
-    "MCE": {"name": "Bolsa de Madrid", "code": "MCE", "city": "Madrid", "country": "Spanielsko",
-            "tz": "Europe/Madrid", "open": "09:00", "close": "17:30", "flag": "🇪🇸"},
-    "VIE": {"name": "Wiener Boerse", "code": "VIE", "city": "Vieden", "country": "Rakusko",
-            "tz": "Europe/Vienna", "open": "09:00", "close": "17:30", "flag": "🇦🇹"},
-    "WSE": {"name": "Warsaw Stock Exchange", "code": "WSE", "city": "Varsava", "country": "Polsko",
-            "tz": "Europe/Warsaw", "open": "09:00", "close": "17:50", "flag": "🇵🇱"},
-    "PRA": {"name": "Prague Stock Exchange", "code": "PRA", "city": "Praha", "country": "Cesko",
-            "tz": "Europe/Prague", "open": "09:00", "close": "16:20", "flag": "🇨🇿"},
-    "AMS": {"name": "Euronext Amsterdam", "code": "AMS", "city": "Amsterdam", "country": "Holandsko",
-            "tz": "Europe/Amsterdam", "open": "09:00", "close": "17:30", "flag": "🇳🇱"},
-    "BRU": {"name": "Euronext Brussels", "code": "BRU", "city": "Brusel", "country": "Belgicko",
-            "tz": "Europe/Brussels", "open": "09:00", "close": "17:30", "flag": "🇧🇪"},
-    "LIS": {"name": "Euronext Lisbon", "code": "LIS", "city": "Lisabon", "country": "Portugalsko",
-            "tz": "Europe/Lisbon", "open": "09:00", "close": "17:30", "flag": "🇵🇹"},
+    "OSL": {"name": "Oslo Bors", "code": "OSL",
+            "city": "Oslo", "country": "Norsko",
+            "tz": "Europe/Oslo", "open": "09:00", "close": "16:25",
+            "flag": "🇳🇴"},
+    "STO": {"name": "Nasdaq Stockholm", "code": "STO",
+            "city": "Stokholm", "country": "Svedsko",
+            "tz": "Europe/Stockholm", "open": "09:00", "close": "17:25",
+            "flag": "🇸🇪"},
+    "HEL": {"name": "Nasdaq Helsinki", "code": "HEL",
+            "city": "Helsinki", "country": "Finsko",
+            "tz": "Europe/Helsinki", "open": "10:00", "close": "18:30",
+            "flag": "🇫🇮"},
+    "CPH": {"name": "Nasdaq Copenhagen", "code": "CPH",
+            "city": "Kodan", "country": "Dansko",
+            "tz": "Europe/Copenhagen", "open": "09:00", "close": "17:00",
+            "flag": "🇩🇰"},
+    "MIL": {"name": "Borsa Italiana", "code": "MIL",
+            "city": "Milano", "country": "Taliansko",
+            "tz": "Europe/Rome", "open": "09:00", "close": "17:30",
+            "flag": "🇮🇹"},
+    "MCE": {"name": "Bolsa de Madrid", "code": "MCE",
+            "city": "Madrid", "country": "Spanielsko",
+            "tz": "Europe/Madrid", "open": "09:00", "close": "17:30",
+            "flag": "🇪🇸"},
+    "VIE": {"name": "Wiener Boerse", "code": "VIE",
+            "city": "Vieden", "country": "Rakusko",
+            "tz": "Europe/Vienna", "open": "09:00", "close": "17:30",
+            "flag": "🇦🇹"},
+    "WSE": {"name": "Warsaw Stock Exchange", "code": "WSE",
+            "city": "Varsava", "country": "Polsko",
+            "tz": "Europe/Warsaw", "open": "09:00", "close": "17:50",
+            "flag": "🇵🇱"},
+    "PRA": {"name": "Prague Stock Exchange", "code": "PRA",
+            "city": "Praha", "country": "Cesko",
+            "tz": "Europe/Prague", "open": "09:00", "close": "16:20",
+            "flag": "🇨🇿"},
+    "AMS": {"name": "Euronext Amsterdam", "code": "AMS",
+            "city": "Amsterdam", "country": "Holandsko",
+            "tz": "Europe/Amsterdam", "open": "09:00", "close": "17:30",
+            "flag": "🇳🇱"},
+    "BRU": {"name": "Euronext Brussels", "code": "BRU",
+            "city": "Brusel", "country": "Belgicko",
+            "tz": "Europe/Brussels", "open": "09:00", "close": "17:30",
+            "flag": "🇧🇪"},
+    "LIS": {"name": "Euronext Lisbon", "code": "LIS",
+            "city": "Lisabon", "country": "Portugalsko",
+            "tz": "Europe/Lisbon", "open": "09:00", "close": "17:30",
+            "flag": "🇵🇹"},
 }
 
 EXCHANGE_INFO = {
-    "NMS": ("NASDAQ", "USA"), "NGM": ("NASDAQ", "USA"), "NCM": ("NASDAQ", "USA"),
-    "NYQ": ("NYSE", "USA"), "ASE": ("NYSE American", "USA"), "PCX": ("NYSE Arca", "USA"),
-    "BATS": ("Cboe BZX", "USA"), "PNK": ("OTC Pink", "USA"),
-    "TOR": ("Toronto Stock Exchange", "Kanada"), "VAN": ("TSX Venture Exchange", "Kanada"),
+    "NMS": ("NASDAQ", "USA"),
+    "NGM": ("NASDAQ", "USA"),
+    "NCM": ("NASDAQ", "USA"),
+    "NYQ": ("NYSE", "USA"),
+    "ASE": ("NYSE American", "USA"),
+    "PCX": ("NYSE Arca", "USA"),
+    "BATS": ("Cboe BZX", "USA"),
+    "PNK": ("OTC Pink", "USA"),
+    "TOR": ("Toronto Stock Exchange", "Kanada"),
+    "VAN": ("TSX Venture Exchange", "Kanada"),
     "LSE": ("London Stock Exchange", "Spojene kralovstvo"),
     "IOB": ("London Stock Exchange (IOB)", "Spojene kralovstvo"),
-    "PAR": ("Euronext Paris", "Francuzsko"), "AMS": ("Euronext Amsterdam", "Holandsko"),
-    "BRU": ("Euronext Brussels", "Belgicko"), "LIS": ("Euronext Lisbon", "Portugalsko"),
-    "GER": ("Deutsche Boerse (Xetra)", "Nemecko"), "FRA": ("Frankfurt Stock Exchange", "Nemecko"),
-    "BER": ("Berlin Stock Exchange", "Nemecko"), "SWX": ("SIX Swiss Exchange", "Svajciarsko"),
-    "EBS": ("SIX Swiss Exchange", "Svajciarsko"), "MIL": ("Borsa Italiana", "Taliansko"),
-    "MCE": ("Bolsa de Madrid", "Spanielsko"), "STO": ("Nasdaq Stockholm", "Svedsko"),
-    "CPH": ("Nasdaq Copenhagen", "Dansko"), "HEL": ("Nasdaq Helsinki", "Finsko"),
-    "OSL": ("Oslo Bors", "Norsko"), "VIE": ("Wiener Boerse", "Rakusko"),
-    "WSE": ("Warsaw Stock Exchange", "Polsko"), "PRA": ("Prague Stock Exchange", "Cesko"),
-    "JPX": ("Tokyo Stock Exchange", "Japonsko"), "TYO": ("Tokyo Stock Exchange", "Japonsko"),
-    "HKG": ("Hong Kong Stock Exchange", "Cina"), "SHH": ("Shanghai Stock Exchange", "Cina"),
+    "PAR": ("Euronext Paris", "Francuzsko"),
+    "AMS": ("Euronext Amsterdam", "Holandsko"),
+    "BRU": ("Euronext Brussels", "Belgicko"),
+    "LIS": ("Euronext Lisbon", "Portugalsko"),
+    "GER": ("Deutsche Boerse (Xetra)", "Nemecko"),
+    "FRA": ("Frankfurt Stock Exchange", "Nemecko"),
+    "BER": ("Berlin Stock Exchange", "Nemecko"),
+    "SWX": ("SIX Swiss Exchange", "Svajciarsko"),
+    "EBS": ("SIX Swiss Exchange", "Svajciarsko"),
+    "MIL": ("Borsa Italiana", "Taliansko"),
+    "MCE": ("Bolsa de Madrid", "Spanielsko"),
+    "STO": ("Nasdaq Stockholm", "Svedsko"),
+    "CPH": ("Nasdaq Copenhagen", "Dansko"),
+    "HEL": ("Nasdaq Helsinki", "Finsko"),
+    "OSL": ("Oslo Bors", "Norsko"),
+    "VIE": ("Wiener Boerse", "Rakusko"),
+    "WSE": ("Warsaw Stock Exchange", "Polsko"),
+    "PRA": ("Prague Stock Exchange", "Cesko"),
+    "JPX": ("Tokyo Stock Exchange", "Japonsko"),
+    "TYO": ("Tokyo Stock Exchange", "Japonsko"),
+    "HKG": ("Hong Kong Stock Exchange", "Cina"),
+    "SHH": ("Shanghai Stock Exchange", "Cina"),
     "SHZ": ("Shenzhen Stock Exchange", "Cina"),
     "NSI": ("National Stock Exchange of India", "India"),
     "BSE": ("Bombay Stock Exchange", "India"),
     "ASX": ("Australian Securities Exchange", "Australia"),
-    "SAO": ("B3 (Brazilia)", "Brazilia"), "MEX": ("Bolsa Mexicana de Valores", "Mexiko"),
+    "SAO": ("B3 (Brazilia)", "Brazilia"),
+    "MEX": ("Bolsa Mexicana de Valores", "Mexiko"),
     "JNB": ("Johannesburg Stock Exchange", "Juzna Afrika"),
-    "TLV": ("Tel Aviv Stock Exchange", "Izrael"), "SES": ("Singapore Exchange", "Singapur"),
+    "TLV": ("Tel Aviv Stock Exchange", "Izrael"),
+    "SES": ("Singapore Exchange", "Singapur"),
     "KSC": ("Korea Exchange (KOSPI)", "Juzna Korea"),
     "KOE": ("Korea Exchange (KOSDAQ)", "Juzna Korea"),
 }
@@ -135,10 +198,15 @@ def _pct_change_over_period(hist, months=None, years=None):
         last_price = float(hist.iloc[-1])
         if pd.isna(last_price):
             return None
-        offset = pd.DateOffset(years=years) if years else pd.DateOffset(months=months)
+        if years:
+            offset = pd.DateOffset(years=years)
+        else:
+            offset = pd.DateOffset(months=months)
         target_date = last_date - offset
         past_price = hist.asof(target_date)
-        if past_price is None or (isinstance(past_price, float) and pd.isna(past_price)):
+        if past_price is None:
+            return None
+        if isinstance(past_price, float) and pd.isna(past_price):
             return None
         past_price = float(past_price)
         if past_price == 0 or pd.isna(past_price):
@@ -162,7 +230,7 @@ def growth_cell_html(val):
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return "N/A"
     cls = "growth-pos" if val >= 0 else "growth-neg"
-    return '<span class="' + cls + '">' + format_growth(val) + '</span>'
+    return '<span class="' + cls + '">' + format_growth(val) + "</span>"
 
 
 HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
@@ -172,15 +240,14 @@ GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 @st.cache_resource(show_spinner=False)
 def _connect_gsheet():
     if gspread is None or _GoogleCredentials is None:
-        return None, {
-            "ok": False,
-            "detail": "Kniznica gspread / google-auth nie je nainstalovana.",
-        }
-    if "gcp_service_account" not in st.secrets or "gsheet_url" not in st.secrets:
-        return None, {
-            "ok": False,
-            "detail": "V st.secrets chyba gcp_service_account alebo gsheet_url - pouziva sa lokalny subor.",
-        }
+        msg = "Kniznica gspread nie je nainstalovana."
+        return None, {"ok": False, "detail": msg}
+    if "gcp_service_account" not in st.secrets:
+        msg = "V st.secrets chyba gcp_service_account."
+        return None, {"ok": False, "detail": msg}
+    if "gsheet_url" not in st.secrets:
+        msg = "V st.secrets chyba gsheet_url."
+        return None, {"ok": False, "detail": msg}
     try:
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -196,12 +263,11 @@ def _connect_gsheet():
         except gspread.WorksheetNotFound:
             ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
             ws.update([GSHEET_HEADER])
-        return ws, {
-            "ok": True,
-            "detail": 'Pripojene k Google Sheetu "' + sh.title + '", harok "Holdings".',
-        }
+        msg = "Pripojene k: " + sh.title
+        return ws, {"ok": True, "detail": msg}
     except Exception as e:
-        return None, {"ok": False, "detail": "Chyba pripojenia: " + type(e).__name__ + ": " + str(e)}
+        msg = "Chyba: " + type(e).__name__ + ": " + str(e)
+        return None, {"ok": False, "detail": msg}
 
 
 def load_holdings():
@@ -219,12 +285,15 @@ def load_holdings():
                     qty = float(r.get("Qty", 0) or 0)
                 except Exception:
                     qty = 0.0
-                result[tkr] = {"qty": qty, "exchange": r.get("Exchange", "")}
+                result[tkr] = {
+                    "qty": qty,
+                    "exchange": r.get("Exchange", ""),
+                }
             return result
         except Exception as e:
+            msg = "Chyba citania GSheets: " + str(e)
             st.session_state["gsheet_status"] = {
-                "ok": False,
-                "detail": "Chyba citania z Google Sheets: " + type(e).__name__ + ": " + str(e),
+                "ok": False, "detail": msg
             }
     if not HOLDINGS_FILE.exists():
         return {}
@@ -242,28 +311,27 @@ def save_holdings(holdings, exchanges):
     if ws is not None:
         try:
             rows = [GSHEET_HEADER] + [
-                [tkr, qty, exchanges.get(tkr, "")] for tkr, qty in holdings.items()
+                [tkr, qty, exchanges.get(tkr, "")]
+                for tkr, qty in holdings.items()
             ]
             ws.clear()
             ws.update(rows)
+            n = str(len(holdings))
+            t = datetime.now().strftime("%H:%M:%S")
+            msg = "Ulozene do GSheets (" + n + " pozicii) o " + t
             st.session_state["gsheet_last_write"] = {
-                "ok": True,
-                "detail": "Ulozene do Google Sheets ("
-                          + str(len(holdings))
-                          + " pozicii) o "
-                          + datetime.now().strftime("%H:%M:%S")
-                          + ".",
+                "ok": True, "detail": msg
             }
             return
         except Exception as e:
+            msg = "Zapis GSheets ZLYHAL: " + str(e)
             st.session_state["gsheet_last_write"] = {
-                "ok": False,
-                "detail": "Zapis do Google Sheets ZLYHAL: " + type(e).__name__ + ": " + str(e),
+                "ok": False, "detail": msg
             }
     else:
+        msg = "GSheets nie je pripojeny - lokalny subor."
         st.session_state["gsheet_last_write"] = {
-            "ok": False,
-            "detail": "Google Sheets nie je pripojeny - ulozene len do lokalneho suboru.",
+            "ok": False, "detail": msg
         }
     data = {
         tkr: {"qty": qty, "exchange": exchanges.get(tkr, "")}
@@ -281,19 +349,31 @@ def get_status(exchange, now_utc):
     now_local = now_utc.astimezone(tz)
     open_h, open_m = map(int, exchange["open"].split(":"))
     close_h, close_m = map(int, exchange["close"].split(":"))
-    today_open = now_local.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
-    today_close = now_local.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
+    today_open = now_local.replace(
+        hour=open_h, minute=open_m, second=0, microsecond=0
+    )
+    today_close = now_local.replace(
+        hour=close_h, minute=close_m, second=0, microsecond=0
+    )
     is_weekday = now_local.weekday() < 5
     is_open = is_weekday and today_open <= now_local < today_close
     if is_open:
-        return {"is_open": True, "delta": now_local - today_open, "local_time": now_local}
+        return {
+            "is_open": True,
+            "delta": now_local - today_open,
+            "local_time": now_local,
+        }
     if is_weekday and now_local < today_open:
         candidate = today_open
     else:
         candidate = today_open + timedelta(days=1)
     while candidate.weekday() >= 5:
         candidate += timedelta(days=1)
-    return {"is_open": False, "delta": candidate - now_local, "local_time": now_local}
+    return {
+        "is_open": False,
+        "delta": candidate - now_local,
+        "local_time": now_local,
+    }
 
 
 def format_delta(delta):
@@ -365,14 +445,19 @@ def _lookup_ticker_by_isin_cached(isin_clean):
     quotes = search.quotes or []
     if not quotes:
         raise _LookupMiss("no quotes for " + isin_clean)
-    preferred = [q for q in quotes if q.get("quoteType") in ("EQUITY", "ETF")]
+    preferred = [
+        q for q in quotes
+        if q.get("quoteType") in ("EQUITY", "ETF")
+    ]
     best = (preferred or quotes)[0]
     symbol = best.get("symbol")
     if not symbol:
         raise _LookupMiss("no symbol for " + isin_clean)
     return {
         "symbol": symbol,
-        "name": best.get("shortname") or best.get("longname") or symbol,
+        "name": (
+            best.get("shortname") or best.get("longname") or symbol
+        ),
         "exchange": best.get("exchDisp") or "",
     }
 
@@ -394,7 +479,10 @@ def estimate_dividend_frequency(dividends):
     if len(recent) < 2:
         return "N/A"
     dates = list(recent.index)
-    gaps_days = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
+    gaps_days = [
+        (dates[i] - dates[i - 1]).days
+        for i in range(1, len(dates))
+    ]
     if not gaps_days:
         return "N/A"
     avg_gap = sum(gaps_days) / len(gaps_days)
@@ -421,7 +509,10 @@ _FREQ_BADGE_CLASS = {
 def freq_badge_html(freq):
     cls = _FREQ_BADGE_CLASS.get(freq)
     if cls:
-        return '<span class="freq-badge ' + cls + '">' + freq + '</span>'
+        return (
+            '<span class="freq-badge ' + cls + '">'
+            + freq + "</span>"
+        )
     return freq
 
 
@@ -440,13 +531,19 @@ def _normalize_yield_pct(raw):
 
 
 def _parse_stock_info(ticker, info, dividends):
-    price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+    price = (
+        info.get("currentPrice")
+        or info.get("regularMarketPrice")
+        or info.get("previousClose")
+    )
     if price is None:
         return None
     name = info.get("shortName") or info.get("longName") or ticker
     currency = info.get("currency") or ""
     exchange_code = info.get("exchange") or ""
-    exchange_name, country = lookup_exchange(exchange_code, info.get("fullExchangeName"))
+    exchange_name, country = lookup_exchange(
+        exchange_code, info.get("fullExchangeName")
+    )
     frequency = estimate_dividend_frequency(dividends)
     last_div_amount = None
     if dividends is not None and len(dividends) > 0:
@@ -455,14 +552,18 @@ def _parse_stock_info(ticker, info, dividends):
     ex_div_ts = info.get("exDividendDate")
     if ex_div_ts:
         try:
-            ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).date()
+            ex_div_date = datetime.fromtimestamp(
+                ex_div_ts, tz=timezone.utc
+            ).date()
         except Exception:
             ex_div_date = None
     pay_div_date = None
     pay_div_ts = info.get("dividendDate")
     if pay_div_ts:
         try:
-            pay_div_date = datetime.fromtimestamp(pay_div_ts, tz=timezone.utc).date()
+            pay_div_date = datetime.fromtimestamp(
+                pay_div_ts, tz=timezone.utc
+            ).date()
         except Exception:
             pay_div_date = None
     annual_rate = info.get("dividendRate")
@@ -479,9 +580,13 @@ def _parse_stock_info(ticker, info, dividends):
     if annual_rate is not None and price:
         dividend_yield_pct = annual_rate / price * 100
     if dividend_yield_pct is None:
-        dividend_yield_pct = _normalize_yield_pct(info.get("dividendYield"))
+        dividend_yield_pct = _normalize_yield_pct(
+            info.get("dividendYield")
+        )
     if dividend_yield_pct is None:
-        dividend_yield_pct = _normalize_yield_pct(info.get("trailingAnnualDividendYield"))
+        dividend_yield_pct = _normalize_yield_pct(
+            info.get("trailingAnnualDividendYield")
+        )
     return {
         "ticker": ticker,
         "name": name,
@@ -503,7 +608,9 @@ def _parse_stock_info(ticker, info, dividends):
 def _fetch_growth_data_cached_v4(ticker):
     t = yf.Ticker(ticker)
     try:
-        hist = t.history(period="6y", interval="1d", auto_adjust=False)["Close"]
+        hist = t.history(
+            period="6y", interval="1d", auto_adjust=False
+        )["Close"]
         hist = hist.dropna()
     except Exception:
         hist = None
@@ -538,45 +645,53 @@ def fetch_stock_data(ticker):
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.markdown(
-    "<style>.block-container{padding-top:1.2rem;} h3{margin-bottom:0.4rem;}</style>",
+    "<style>.block-container{padding-top:1.2rem;}"
+    " h3{margin-bottom:0.4rem;}</style>",
     unsafe_allow_html=True,
 )
-st.markdown("### 📊 Dividend tracker")
+st.markdown("### Dividend tracker")
 
 now_utc = datetime.now(ZoneInfo("UTC"))
 
-BOARD_CSS = (
-    "<style>"
-    ".board-wrap{background:#ffffff;border-radius:10px;padding:0;border:1px solid #e3e6ea;overflow:hidden;}"
-    ".board{width:100%;border-collapse:collapse;border-spacing:0;"
-    "font-family:'Courier New',Consolas,monospace;}"
-    ".board th{text-align:left;padding:8px 16px;font-size:11.5px;letter-spacing:0.1em;"
-    "color:#8a93a1;text-transform:uppercase;border-bottom:1px solid #e3e6ea;background:#fafbfc;}"
-    ".board td{padding:6px 16px;font-size:15px;letter-spacing:0.02em;white-space:nowrap;"
-    "line-height:1.1;border-bottom:1px solid #f0f1f3;}"
-    ".board tr:last-child td{border-bottom:none;}"
-    ".board tbody tr:hover td{background:#f2f5fa;}"
-    ".row-open td{color:#15a24a;}"
-    ".row-closed td{color:#e0362b;}"
-    ".code-cell{font-weight:700;}"
-    ".freq-badge{display:inline-block;padding:2px 10px;border-radius:999px;"
-    "font-size:13px;font-weight:600;letter-spacing:0.01em;}"
-    ".freq-quarterly{background:#e7f0fe;color:#2f5fd6;}"
-    ".freq-monthly{background:#e3f7ea;color:#1c9350;}"
-    ".freq-yearly{background:#f2e9fb;color:#7c3fc9;}"
-    ".freq-semiannual{background:#fceceb;color:#c2453c;}"
-    ".growth-pos{color:#15a24a;font-weight:600;}"
-    ".growth-neg{color:#e0362b;font-weight:600;}"
-    "</style>"
-)
-st.markdown(BOARD_CSS, unsafe_allow_html=True)
+_CSS_PARTS = [
+    "<style>",
+    ".board-wrap{background:#ffffff;border-radius:10px;",
+    "padding:0;border:1px solid #e3e6ea;overflow:hidden;}",
+    ".board{width:100%;border-collapse:collapse;border-spacing:0;",
+    "font-family:'Courier New',Consolas,monospace;}",
+    ".board th{text-align:left;padding:8px 16px;font-size:11.5px;",
+    "letter-spacing:0.1em;color:#8a93a1;text-transform:uppercase;",
+    "border-bottom:1px solid #e3e6ea;background:#fafbfc;}",
+    ".board td{padding:6px 16px;font-size:15px;",
+    "letter-spacing:0.02em;white-space:nowrap;",
+    "line-height:1.1;border-bottom:1px solid #f0f1f3;}",
+    ".board tr:last-child td{border-bottom:none;}",
+    ".board tbody tr:hover td{background:#f2f5fa;}",
+    ".row-open td{color:#15a24a;}",
+    ".row-closed td{color:#e0362b;}",
+    ".code-cell{font-weight:700;}",
+    ".freq-badge{display:inline-block;padding:2px 10px;",
+    "border-radius:999px;font-size:13px;font-weight:600;}",
+    ".freq-quarterly{background:#e7f0fe;color:#2f5fd6;}",
+    ".freq-monthly{background:#e3f7ea;color:#1c9350;}",
+    ".freq-yearly{background:#f2e9fb;color:#7c3fc9;}",
+    ".freq-semiannual{background:#fceceb;color:#c2453c;}",
+    ".growth-pos{color:#15a24a;font-weight:600;}",
+    ".growth-neg{color:#e0362b;font-weight:600;}",
+    "</style>",
+]
+st.markdown("".join(_CSS_PARTS), unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────
 
 if "holdings" not in st.session_state:
     _loaded = load_holdings()
-    st.session_state.holdings = {tkr: rec.get("qty", 0) for tkr, rec in _loaded.items()}
-    st.session_state.holdings_exchange = {tkr: rec.get("exchange", "") for tkr, rec in _loaded.items()}
+    st.session_state.holdings = {
+        tkr: rec.get("qty", 0) for tkr, rec in _loaded.items()
+    }
+    st.session_state.holdings_exchange = {
+        tkr: rec.get("exchange", "") for tkr, rec in _loaded.items()
+    }
 
 if "holdings_exchange" not in st.session_state:
     st.session_state.holdings_exchange = {}
@@ -595,7 +710,11 @@ for _tkr in list(st.session_state.holdings):
 # ============================================================
 
 existing_cities = {ex["city"] for ex in EXCHANGES}
-owned_codes = {rec.get("exchange_code") for rec in stock_records.values() if rec.get("exchange_code")}
+owned_codes = {
+    rec.get("exchange_code")
+    for rec in stock_records.values()
+    if rec.get("exchange_code")
+}
 extras = []
 for _code in owned_codes:
     _ex_info = EXTRA_MARKETS_BY_CODE.get(_code)
@@ -605,91 +724,114 @@ for _code in owned_codes:
     existing_cities.add(_ex_info["city"])
 
 exchanges_display = EXCHANGES + extras
-results = [(ex, get_status(ex, now_utc)) for ex in exchanges_display]
-results.sort(key=lambda item: (not item[1]["is_open"], item[1]["delta"]))
+results = [
+    (ex, get_status(ex, now_utc)) for ex in exchanges_display
+]
+results.sort(
+    key=lambda item: (not item[1]["is_open"], item[1]["delta"])
+)
 
 row_parts = []
 for ex, status in results:
     local_time_str = status["local_time"].strftime("%H:%M")
-    row_class = "row-open" if status["is_open"] else "row-closed"
     if status["is_open"]:
-        stav = "OTVORENE &mdash; " + format_delta(status["delta"]).upper()
+        row_class = "row-open"
+        delta_str = format_delta(status["delta"]).upper()
+        stav = "OTVORENE &mdash; " + delta_str
     else:
-        stav = "ZATVORENE &mdash; O " + format_delta(status["delta"]).upper()
-    bullet = "●"
-    row_parts.append(
-        '<tr class="' + row_class + '">'
-        '<td class="code-cell">' + ex["flag"] + " " + ex["code"] + "</td>"
-        "<td>" + ex["city"] + "</td>"
-        "<td>" + ex["country"] + "</td>"
-        "<td>" + local_time_str + "</td>"
-        "<td>" + bullet + " " + stav + "</td>"
-        "</tr>"
+        row_class = "row-closed"
+        delta_str = format_delta(status["delta"]).upper()
+        stav = "ZATVORENE &mdash; O " + delta_str
+    _row = (
+        "<tr class=\"" + row_class + "\">"
+        + "<td class=\"code-cell\">"
+        + ex["flag"] + " " + ex["code"] + "</td>"
+        + "<td>" + ex["city"] + "</td>"
+        + "<td>" + ex["country"] + "</td>"
+        + "<td>" + local_time_str + "</td>"
+        + "<td>&#9679; " + stav + "</td>"
+        + "</tr>"
     )
+    row_parts.append(_row)
 
-st.markdown(
-    '<div class="board-wrap"><table class="board">'
-    "<thead><tr><th>Burza</th><th>Mesto</th><th>Stat</th>"
-    "<th>Miestny cas</th><th>Stav</th></tr></thead>"
-    "<tbody>" + "".join(row_parts) + "</tbody></table></div>",
-    unsafe_allow_html=True,
+_t1_html = (
+    "<div class=\"board-wrap\"><table class=\"board\">"
+    "<thead><tr>"
+    "<th>Burza</th><th>Mesto</th><th>Stat</th>"
+    "<th>Miestny cas</th><th>Stav</th>"
+    "</tr></thead><tbody>"
+    + "".join(row_parts)
+    + "</tbody></table></div>"
 )
+st.markdown(_t1_html, unsafe_allow_html=True)
 
 # ============================================================
 # SEKCIA 2 - PRIDAT AKCIU
 # ============================================================
 
 _gs_status = st.session_state.get(
-    "gsheet_status", {"ok": False, "detail": "Pripojenie sa este vykonava..."}
+    "gsheet_status",
+    {"ok": False, "detail": "Pripojenie sa este vykonava..."},
 )
-_gs_last_write = st.session_state.get("gsheet_last_write", {"ok": None, "detail": ""})
+_gs_last_write = st.session_state.get(
+    "gsheet_last_write", {"ok": None, "detail": ""}
+)
 
-_gs_detail = _gs_status.get("detail", "")
-_lw_detail = _gs_last_write.get("detail", "")
+_gs_detail = str(_gs_status.get("detail", ""))
+_lw_detail = str(_gs_last_write.get("detail", ""))
+_lw_ok = _gs_last_write.get("ok", None)
+_NL = chr(10)
 
 if _gs_status["ok"]:
-    _status_line = "Ukladanie: **Google Sheets** (" + _gs_detail + ")"
+    _status_line = "Ukladanie: **Google Sheets** ("
+    _status_line += _gs_detail
+    _status_line += ")"
 else:
-    _status_line = (
-        "Ukladanie: **lokalny subor** - Google Sheets nie je aktivny ("
-        + _gs_detail
-        + ")"
-    )
+    _status_line = "Ukladanie: **lokalny subor**"
+    _status_line += " - GSheets nie je aktivny ("
+    _status_line += _gs_detail
+    _status_line += ")"
 
-if _gs_last_write["ok"] is False:
-    _status_line += "  
-Posledny zapis: " + _lw_detail
-elif _gs_last_write["ok"] is True:
-    _status_line += "  
-" + _lw_detail
+if _lw_ok is False:
+    _status_line += "  " + _NL + "Posledny zapis: " + _lw_detail
+elif _lw_ok is True:
+    _status_line += "  " + _NL + _lw_detail
 
 with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_status_line)
     st.caption(
-        "Pozn.: pripojenie na Google Sheets sa skusa len raz za bezanie appky (vykesovane). "
-        "Ak si prave zmenil opravnenia zdielania Sheetu, pouzij tlacidlo nizsie."
+        "Pozn.: pripojenie na GSheets sa skusa len raz za bezanie "
+        "appky. Ak si zmenil opravnenia, pouzij tlacidlo nizsie."
     )
-    if st.button("Skusit pripojenie na Google Sheets znova"):
+    if st.button("Skusit pripojenie na GSheets znova"):
         _connect_gsheet.clear()
         _, _fresh_status = _connect_gsheet()
         st.session_state["gsheet_status"] = _fresh_status
         st.rerun()
     st.divider()
-    st.caption(
-        "Poistka pre pripad problemov: stiahni si aktualny stav portfolia ako JSON subor "
-        "na svoj pocitac, kedykolvek chces."
+    st.caption("Stiahni si aktualny stav portfolia ako JSON subor.")
+    _backup_data = json.dumps(
+        {
+            tkr: {
+                "qty": qty,
+                "exchange": st.session_state.holdings_exchange.get(
+                    tkr, ""
+                ),
+            }
+            for tkr, qty in st.session_state.holdings.items()
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    _fname = (
+        "holdings_backup_"
+        + datetime.now().strftime("%Y%m%d_%H%M%S")
+        + ".json"
     )
     st.download_button(
         "Stiahnut zalohu portfolia (JSON)",
-        data=json.dumps(
-            {
-                tkr: {"qty": qty, "exchange": st.session_state.holdings_exchange.get(tkr, "")}
-                for tkr, qty in st.session_state.holdings.items()
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        file_name="holdings_backup_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
+        data=_backup_data,
+        file_name=_fname,
         mime="application/json",
     )
 
@@ -697,7 +839,9 @@ st.markdown("#### Pridat akciu")
 
 
 def _sync_isin_from_ticker():
-    t = (st.session_state.get("add_ticker_field") or "").strip().upper()
+    t = (
+        st.session_state.get("add_ticker_field") or ""
+    ).strip().upper()
     st.session_state["add_ticker_field"] = t
     if t:
         isin = lookup_isin_by_ticker(t)
@@ -705,32 +849,40 @@ def _sync_isin_from_ticker():
             st.session_state["add_isin_field"] = isin
             st.session_state["add_sync_msg"] = None
         else:
-            st.session_state["add_sync_msg"] = (
-                "info",
-                'ISIN pre "' + t + '" sa nepodarilo automaticky dohladat. '
-                "Ak ho poznas, zadaj ho rucne - na pridanie akcie ale ISIN nie je nutny, staci ticker.",
+            msg = (
+                "ISIN pre ticker sa nepodarilo dohladat. "
+                "Zadaj ho rucne - ISIN nie je nutny, staci ticker."
             )
+            st.session_state["add_sync_msg"] = ("info", msg)
 
 
 def _sync_ticker_from_isin():
-    i = (st.session_state.get("add_isin_field") or "").strip().upper()
+    i = (
+        st.session_state.get("add_isin_field") or ""
+    ).strip().upper()
     st.session_state["add_isin_field"] = i
     if i:
         info = lookup_ticker_by_isin(i)
         if info:
-            st.session_state["add_ticker_field"] = info["symbol"].upper()
+            st.session_state["add_ticker_field"] = (
+                info["symbol"].upper()
+            )
             st.session_state["add_sync_msg"] = None
         else:
-            st.session_state["add_sync_msg"] = (
-                "warning",
-                'Ticker pre ISIN "' + i + '" sa nepodarilo najst. Skontroluj, ci je ISIN spravny, '
-                "alebo zadaj ticker rucne.",
+            msg = (
+                "Ticker pre ISIN sa nepodarilo najst. "
+                "Skontroluj ISIN alebo zadaj ticker rucne."
             )
+            st.session_state["add_sync_msg"] = ("warning", msg)
 
 
 def _on_add_stock_click():
-    ticker_clean = (st.session_state.get("add_ticker_field") or "").strip().upper()
-    isin_clean = (st.session_state.get("add_isin_field") or "").strip().upper()
+    ticker_clean = (
+        st.session_state.get("add_ticker_field") or ""
+    ).strip().upper()
+    isin_clean = (
+        st.session_state.get("add_isin_field") or ""
+    ).strip().upper()
     qty_val = st.session_state.get("add_qty_field")
 
     if not ticker_clean and isin_clean:
@@ -740,57 +892,72 @@ def _on_add_stock_click():
             st.session_state["add_ticker_field"] = ticker_clean
 
     if not ticker_clean:
-        st.session_state["add_stock_msg"] = ("warning", "Zadaj ticker alebo ISIN akcie.")
+        st.session_state["add_stock_msg"] = (
+            "warning", "Zadaj ticker alebo ISIN akcie."
+        )
         return
     if qty_val is None or qty_val == 0:
-        st.session_state["add_stock_msg"] = ("warning", "Zadaj mnozstvo rozne od 0.")
+        st.session_state["add_stock_msg"] = (
+            "warning", "Zadaj mnozstvo rozne od 0."
+        )
         return
 
     if qty_val > 0:
         new_data = fetch_stock_data(ticker_clean)
         if new_data is None:
-            st.session_state["add_stock_msg"] = (
-                "error", 'Ticker "' + ticker_clean + '" sa nepodarilo najst.'
-            )
+            msg = "Ticker " + ticker_clean + " sa nepodarilo najst."
+            st.session_state["add_stock_msg"] = ("error", msg)
             return
         st.session_state.holdings[ticker_clean] = (
             st.session_state.holdings.get(ticker_clean, 0) + qty_val
         )
-        st.session_state.holdings_exchange[ticker_clean] = new_data.get("exchange", "")
-        save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
-        st.session_state["add_stock_msg"] = (
-            "success",
-            "Pridane: " + format_qty(qty_val) + " ks " + ticker_clean + " (" + new_data["name"] + ")",
+        st.session_state.holdings_exchange[ticker_clean] = (
+            new_data.get("exchange", "")
         )
+        save_holdings(
+            st.session_state.holdings,
+            st.session_state.holdings_exchange,
+        )
+        msg = (
+            "Pridane: " + format_qty(qty_val)
+            + " ks " + ticker_clean
+            + " (" + new_data["name"] + ")"
+        )
+        st.session_state["add_stock_msg"] = ("success", msg)
     else:
         current_qty = st.session_state.holdings.get(ticker_clean, 0)
         if current_qty <= 0:
-            st.session_state["add_stock_msg"] = (
-                "info",
-                'Akcia "' + ticker_clean + '" nie je momentalne vlastnena, nie je co odobrat.',
+            msg = (
+                "Akcia " + ticker_clean
+                + " nie je vlastnena, nie je co odobrat."
             )
+            st.session_state["add_stock_msg"] = ("info", msg)
             return
         remove_qty = abs(qty_val)
         new_qty = current_qty - remove_qty
         if new_qty <= 0:
             del st.session_state.holdings[ticker_clean]
             st.session_state.holdings_exchange.pop(ticker_clean, None)
-            extra_note = (
-                " (odobrate bolo viac, nez si vlastnil, pozicia bola vynulovana)"
-                if remove_qty > current_qty else ""
+            extra = ""
+            if remove_qty > current_qty:
+                extra = " (pozicia vynulovana)"
+            msg = (
+                "Odobrate vsetkych " + format_qty(current_qty)
+                + " ks " + ticker_clean + "." + extra
             )
-            st.session_state["add_stock_msg"] = (
-                "success",
-                "Odobrate vsetkych " + format_qty(current_qty) + " ks " + ticker_clean + "." + extra_note,
-            )
+            st.session_state["add_stock_msg"] = ("success", msg)
         else:
             st.session_state.holdings[ticker_clean] = new_qty
-            st.session_state["add_stock_msg"] = (
-                "success",
-                "Odobrate " + format_qty(remove_qty) + " ks " + ticker_clean + ". "
-                + "Novy stav: " + format_qty(new_qty) + " ks.",
+            msg = (
+                "Odobrate " + format_qty(remove_qty)
+                + " ks " + ticker_clean
+                + ". Novy stav: " + format_qty(new_qty) + " ks."
             )
-        save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
+            st.session_state["add_stock_msg"] = ("success", msg)
+        save_holdings(
+            st.session_state.holdings,
+            st.session_state.holdings_exchange,
+        )
 
     st.session_state["add_ticker_field"] = ""
     st.session_state["add_isin_field"] = ""
@@ -800,25 +967,40 @@ def _on_add_stock_click():
 c1, c2, c3, c4 = st.columns([2.3, 2.3, 1.6, 1])
 with c1:
     st.text_input(
-        "Ticker", placeholder="Ticker, napr. AAPL", label_visibility="collapsed",
-        key="add_ticker_field", on_change=_sync_isin_from_ticker,
+        "Ticker",
+        placeholder="Ticker, napr. AAPL",
+        label_visibility="collapsed",
+        key="add_ticker_field",
+        on_change=_sync_isin_from_ticker,
     )
 with c2:
     st.text_input(
-        "ISIN", placeholder="ISIN, napr. US0378331005", label_visibility="collapsed",
-        key="add_isin_field", on_change=_sync_ticker_from_isin,
+        "ISIN",
+        placeholder="ISIN, napr. US0378331005",
+        label_visibility="collapsed",
+        key="add_isin_field",
+        on_change=_sync_ticker_from_isin,
     )
 with c3:
     st.number_input(
-        "Mnozstvo", step=0.0001, value=None, format="%.4f",
-        placeholder="Mnozstvo", label_visibility="collapsed", key="add_qty_field",
+        "Mnozstvo",
+        step=0.0001,
+        value=None,
+        format="%.4f",
+        placeholder="Mnozstvo",
+        label_visibility="collapsed",
+        key="add_qty_field",
     )
 with c4:
-    st.button("Pridat", use_container_width=True, on_click=_on_add_stock_click)
+    st.button(
+        "Pridat",
+        use_container_width=True,
+        on_click=_on_add_stock_click,
+    )
 
 st.caption(
-    "Staci vyplnit ticker ALEBO ISIN - druhe pole sa po opusteni riadku dohlada automaticky. "
-    "Kladne mnozstvo = nakup (pridanie), zaporne mnozstvo = predaj (odpocet z portfolia)."
+    "Staci vyplnit ticker ALEBO ISIN - druhe pole sa dohlada. "
+    "Kladne mnozstvo = nakup, zaporne = predaj."
 )
 
 _add_sync_msg = st.session_state.pop("add_sync_msg", None)
@@ -844,19 +1026,31 @@ else:
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
         if rec is None:
-            price_str, name = "N/A", tkr
-            exchange_str = st.session_state.holdings_exchange.get(tkr) or "N/A"
-            country_str, div_rocne_str = "N/A", "N/A"
-            growth_strs = {"1m": "N/A", "3m": "N/A", "6m": "N/A", "1y": "N/A", "5y": "N/A"}
+            price_str = "N/A"
+            name = tkr
+            exchange_str = (
+                st.session_state.holdings_exchange.get(tkr) or "N/A"
+            )
+            country_str = "N/A"
+            div_rocne_str = "N/A"
+            growth_strs = {
+                "1m": "N/A", "3m": "N/A", "6m": "N/A",
+                "1y": "N/A", "5y": "N/A",
+            }
         else:
-            price_str = "{:.2f} {}".format(rec["price"], rec["currency"]).strip()
+            price_str = (
+                "{:.2f} {}".format(rec["price"], rec["currency"]).strip()
+            )
             name = rec["name"]
             exchange_str = rec["exchange"]
             country_str = rec["country"]
             pct_annual = None
             if rec.get("annual_rate") is not None and rec.get("price"):
-                pct_annual = (rec["annual_rate"] / rec["price"]) * 100
-            div_rocne_str = "{:.2f} %".format(pct_annual) if pct_annual is not None else "N/A"
+                pct_annual = rec["annual_rate"] / rec["price"] * 100
+            if pct_annual is not None:
+                div_rocne_str = "{:.2f} %".format(pct_annual)
+            else:
+                div_rocne_str = "N/A"
             growth = rec.get("growth") or {}
             growth_strs = {
                 "1m": format_growth(growth.get("1m")),
@@ -882,8 +1076,10 @@ else:
         })
 
     holdings_df = pd.DataFrame(holdings_rows)
-
-    _growth_cols = ["Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]", "Rast 1R [%]", "Rast 5R [%]"]
+    _growth_cols = [
+        "Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]",
+        "Rast 1R [%]", "Rast 5R [%]",
+    ]
 
     def _style_growth_cell(val):
         if not isinstance(val, str):
@@ -895,9 +1091,13 @@ else:
         return ""
 
     try:
-        styled_holdings = holdings_df.style.map(_style_growth_cell, subset=_growth_cols)
+        styled_holdings = holdings_df.style.map(
+            _style_growth_cell, subset=_growth_cols
+        )
     except AttributeError:
-        styled_holdings = holdings_df.style.applymap(_style_growth_cell, subset=_growth_cols)
+        styled_holdings = holdings_df.style.applymap(
+            _style_growth_cell, subset=_growth_cols
+        )
 
     edited_df = st.data_editor(
         styled_holdings,
@@ -914,7 +1114,7 @@ else:
             "Rast 5R [%]": st.column_config.TextColumn(disabled=True),
             "Div.Rocne[%]": st.column_config.TextColumn(disabled=True),
             "Mnozstvo": st.column_config.TextColumn(
-                help="Zadaj mnozstvo. Desatinnu ciarku mozes pouzit bodkou alebo ciarkou."
+                help="Zadaj mnozstvo."
             ),
         },
         hide_index=True,
@@ -927,10 +1127,15 @@ else:
         try:
             new_qty = float(raw)
         except Exception:
-            new_qty = float(st.session_state.holdings.get(row["Ticker"], 0))
+            new_qty = float(
+                st.session_state.holdings.get(row["Ticker"], 0)
+            )
         st.session_state.holdings[row["Ticker"]] = max(0.0, new_qty)
 
-    save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
+    save_holdings(
+        st.session_state.holdings,
+        st.session_state.holdings_exchange,
+    )
 
 # ============================================================
 # SEKCIA 4 - NAJBLIZZSIE EX-DIV DATUMY
@@ -954,12 +1159,13 @@ else:
         last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
         currency = rec["currency"]
-        pct_last = (last_div / price * 100) if (last_div is not None and price) else None
+        if last_div is not None and price:
+            pct_last = last_div / price * 100
+        else:
+            pct_last = None
         pct_annual = rec.get("dividend_yield_pct")
-        if pct_annual is None:
-            pct_annual = (annual_rate / price * 100) if (annual_rate is not None and price) else None
-        # Ocakavany vynos vzdy pre 1 akciu
-        expected = last_div if last_div is not None else None
+        if pct_annual is None and annual_rate is not None and price:
+            pct_annual = annual_rate / price * 100
         div_rows.append({
             "ticker": tkr,
             "name": rec["name"],
@@ -969,96 +1175,121 @@ else:
             "annual_rate": annual_rate,
             "pct_last": pct_last,
             "pct_annual": pct_annual,
-            "expected": expected,
+            "expected": last_div,
             "currency": currency,
             "growth": rec.get("growth") or {},
         })
 
     if not div_rows:
-        st.info("Ziadna z pridanych akcii nema aktualne oficialne oznameny buduci Ex-Div datum.")
+        st.info(
+            "Ziadna akcia nema aktualne oznameny buduci Ex-Div datum."
+        )
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
         div_rows = div_rows[:30]
         div_row_parts = []
         for r in div_rows:
             if r["last_div"] is not None:
-                last_div_str = "{:.4f} {}".format(r["last_div"], r["currency"]).strip()
+                last_div_str = (
+                    "{:.4f} {}".format(
+                        r["last_div"], r["currency"]
+                    ).strip()
+                )
             else:
                 last_div_str = "N/A"
 
-            pct_last_str = "{:.2f} %".format(r["pct_last"]) if r["pct_last"] is not None else "N/A"
-            pct_annual_str = "{:.2f} %".format(r["pct_annual"]) if r["pct_annual"] is not None else "N/A"
+            if r["pct_last"] is not None:
+                pct_last_str = "{:.2f} %".format(r["pct_last"])
+            else:
+                pct_last_str = "N/A"
+
+            if r["pct_annual"] is not None:
+                pct_annual_str = "{:.2f} %".format(r["pct_annual"])
+            else:
+                pct_annual_str = "N/A"
 
             if r["annual_rate"] is not None:
                 curr = r["currency"]
-                annual_div_str = "{:.4f} {}".format(r["annual_rate"], curr).strip()
-                is_usd_a = curr.upper() == "USD" if curr else True
-                if not is_usd_a:
+                annual_div_str = (
+                    "{:.4f} {}".format(r["annual_rate"], curr).strip()
+                )
+                _is_usd = curr.upper() == "USD" if curr else True
+                if not _is_usd:
                     rate_a = get_fx_to_usd_rate(curr)
                     if rate_a is not None:
-                        annual_div_str += " (~ USD {:.2f})".format(r["annual_rate"] * rate_a)
+                        _uv = r["annual_rate"] * rate_a
+                        annual_div_str += (
+                            " (~ USD {:.2f})".format(_uv)
+                        )
             else:
                 annual_div_str = "N/A"
 
             if r["expected"] is not None:
                 curr = r["currency"]
-                expected_str = "{:.4f} {}".format(r["expected"], curr).strip()
-                is_usd = curr.upper() == "USD" if curr else True
-                if not is_usd:
-                    rate = get_fx_to_usd_rate(curr)
-                    if rate is not None:
-                        usd_amount = r["expected"] * rate
-                        expected_str += " (~ USD {:.4f})".format(usd_amount)
+                expected_str = (
+                    "{:.4f} {}".format(r["expected"], curr).strip()
+                )
+                _is_usd2 = curr.upper() == "USD" if curr else True
+                if not _is_usd2:
+                    rate2 = get_fx_to_usd_rate(curr)
+                    if rate2 is not None:
+                        _uv2 = r["expected"] * rate2
+                        expected_str += (
+                            " (~ USD {:.4f})".format(_uv2)
+                        )
             else:
                 expected_str = "N/A"
 
             growth = r.get("growth") or {}
+            _cells = [
+                "<tr>",
+                "<td class=\"code-cell\">" + r["ticker"] + "</td>",
+                "<td>" + r["name"] + "</td>",
+                "<td>1 ks</td>",
+                "<td>" + r["ex_date"].strftime("%d/%m/%y") + "</td>",
+                "<td>" + freq_badge_html(r["frequency"]) + "</td>",
+                "<td>" + growth_cell_html(growth.get("1m")) + "</td>",
+                "<td>" + growth_cell_html(growth.get("3m")) + "</td>",
+                "<td>" + growth_cell_html(growth.get("6m")) + "</td>",
+                "<td>" + growth_cell_html(growth.get("1y")) + "</td>",
+                "<td>" + growth_cell_html(growth.get("5y")) + "</td>",
+                "<td>" + last_div_str + "</td>",
+                "<td>" + annual_div_str + "</td>",
+                "<td>" + pct_last_str + "</td>",
+                "<td>" + pct_annual_str + "</td>",
+                "<td>" + expected_str + "</td>",
+                "</tr>",
+            ]
+            div_row_parts.append("".join(_cells))
 
-            div_row_parts.append(
-                "<tr>"
-                '<td class="code-cell">' + r["ticker"] + "</td>"
-                "<td>" + r["name"] + "</td>"
-                "<td>1 ks</td>"
-                "<td>" + r["ex_date"].strftime("%d/%m/%y") + "</td>"
-                "<td>" + freq_badge_html(r["frequency"]) + "</td>"
-                "<td>" + growth_cell_html(growth.get("1m")) + "</td>"
-                "<td>" + growth_cell_html(growth.get("3m")) + "</td>"
-                "<td>" + growth_cell_html(growth.get("6m")) + "</td>"
-                "<td>" + growth_cell_html(growth.get("1y")) + "</td>"
-                "<td>" + growth_cell_html(growth.get("5y")) + "</td>"
-                "<td>" + last_div_str + "</td>"
-                "<td>" + annual_div_str + "</td>"
-                "<td>" + pct_last_str + "</td>"
-                "<td>" + pct_annual_str + "</td>"
-                "<td>" + expected_str + "</td>"
-                "</tr>"
-            )
-
-        st.markdown(
-            '<div class="board-wrap"><table class="board"><thead><tr>'
-            "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Ex-Div Date</th>"
-            "<th>Frekvencia</th><th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th>"
+        _hdrs4 = (
+            "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
+            "<th>Ex-Div Date</th><th>Frekvencia</th>"
+            "<th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th>"
             "<th>Rast 1R</th><th>Rast 5R</th>"
             "<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>"
-            "<th>% k cene</th><th>Div Yield</th><th>Ocak. vynos/akcia</th>"
-            "</tr></thead><tbody>"
-            + "".join(div_row_parts)
-            + "</tbody></table></div>",
-            unsafe_allow_html=True,
+            "<th>% k cene</th><th>Div Yield</th>"
+            "<th>Ocak. vynos/akcia</th>"
         )
+        _div_html = (
+            "<div class=\"board-wrap\"><table class=\"board\">"
+            "<thead><tr>" + _hdrs4 + "</tr></thead><tbody>"
+            + "".join(div_row_parts)
+            + "</tbody></table></div>"
+        )
+        st.markdown(_div_html, unsafe_allow_html=True)
 
 # ============================================================
 # SEKCIA 5 - VYPLACANE DIVIDENDY
-# Akcie s oficialne ohlasenym datumom vyplaty od dnes do buducnosti.
-# Stlpce: Ticker, Meno, Mnozstvo, Div Date, Frekvencia,
-#         Rocny Div Yield, Dividenda/akcia, Dividenda/spolu
 # Limit 30 riadkov.
 # ============================================================
 
 st.markdown("#### Vyplacane dividendy")
 
 if not st.session_state.holdings:
-    st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad vyplat dividend.")
+    st.info(
+        "Pridaj akcie vyssie, aby sa tu zobrazil prehlad vyplat."
+    )
 else:
     today_pay = datetime.now(timezone.utc).date()
     pay_rows = []
@@ -1073,9 +1304,12 @@ else:
         annual_rate = rec["annual_rate"]
         currency = rec["currency"]
         pct_annual = rec.get("dividend_yield_pct")
-        if pct_annual is None:
-            pct_annual = (annual_rate / price * 100) if (annual_rate is not None and price) else None
-        total_div = (last_div * qty) if last_div is not None else None
+        if pct_annual is None and annual_rate is not None and price:
+            pct_annual = annual_rate / price * 100
+        if last_div is not None:
+            total_div = last_div * qty
+        else:
+            total_div = None
         pay_rows.append({
             "ticker": tkr,
             "name": rec["name"],
@@ -1089,51 +1323,68 @@ else:
         })
 
     if not pay_rows:
-        st.info("Ziadna z pridanych akcii nema aktualne oficialne oznameny buduci datum vyplaty dividendy.")
+        st.info(
+            "Ziadna akcia nema oznameny buduci datum vyplaty dividendy."
+        )
     else:
         pay_rows.sort(key=lambda r: r["pay_date"])
         pay_rows = pay_rows[:30]
         pay_row_parts = []
         for r in pay_rows:
-            pct_annual_str = "{:.2f} %".format(r["pct_annual"]) if r["pct_annual"] is not None else "N/A"
+            if r["pct_annual"] is not None:
+                pct_annual_str = "{:.2f} %".format(r["pct_annual"])
+            else:
+                pct_annual_str = "N/A"
 
             if r["last_div"] is not None:
-                last_div_str = "{:.4f} {}".format(r["last_div"], r["currency"]).strip()
+                last_div_str = (
+                    "{:.4f} {}".format(
+                        r["last_div"], r["currency"]
+                    ).strip()
+                )
             else:
                 last_div_str = "N/A"
 
             if r["total_div"] is not None:
                 curr = r["currency"]
-                total_div_str = "{:.2f} {}".format(r["total_div"], curr).strip()
-                is_usd = curr.upper() == "USD" if curr else True
-                if not is_usd:
-                    rate = get_fx_to_usd_rate(curr)
-                    if rate is not None:
-                        usd_amount = r["total_div"] * rate
-                        total_div_str += " (~ USD {:.2f})".format(usd_amount)
+                total_div_str = (
+                    "{:.2f} {}".format(r["total_div"], curr).strip()
+                )
+                _is_usd3 = curr.upper() == "USD" if curr else True
+                if not _is_usd3:
+                    rate3 = get_fx_to_usd_rate(curr)
+                    if rate3 is not None:
+                        _uv3 = r["total_div"] * rate3
+                        total_div_str += (
+                            " (~ USD {:.2f})".format(_uv3)
+                        )
             else:
                 total_div_str = "N/A"
 
-            pay_row_parts.append(
-                "<tr>"
-                '<td class="code-cell">' + r["ticker"] + "</td>"
-                "<td>" + r["name"] + "</td>"
-                "<td>" + format_qty(r["qty"]) + " ks</td>"
-                "<td>" + r["pay_date"].strftime("%d/%m/%y") + "</td>"
-                "<td>" + freq_badge_html(r["frequency"]) + "</td>"
-                "<td>" + pct_annual_str + "</td>"
-                "<td>" + last_div_str + "</td>"
-                "<td>" + total_div_str + "</td>"
-                "</tr>"
-            )
+            _pcells = [
+                "<tr>",
+                "<td class=\"code-cell\">" + r["ticker"] + "</td>",
+                "<td>" + r["name"] + "</td>",
+                "<td>" + format_qty(r["qty"]) + " ks</td>",
+                "<td>" + r["pay_date"].strftime("%d/%m/%y") + "</td>",
+                "<td>" + freq_badge_html(r["frequency"]) + "</td>",
+                "<td>" + pct_annual_str + "</td>",
+                "<td>" + last_div_str + "</td>",
+                "<td>" + total_div_str + "</td>",
+                "</tr>",
+            ]
+            pay_row_parts.append("".join(_pcells))
 
-        st.markdown(
-            '<div class="board-wrap"><table class="board"><thead><tr>'
-            "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th><th>Div Date</th>"
-            "<th>Frekvencia</th><th>Rocny Div Yield</th>"
+        _hdrs5 = (
+            "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
+            "<th>Div Date</th><th>Frekvencia</th>"
+            "<th>Rocny Div Yield</th>"
             "<th>Dividenda/akcia</th><th>Dividenda/spolu</th>"
-            "</tr></thead><tbody>"
-            + "".join(pay_row_parts)
-            + "</tbody></table></div>",
-            unsafe_allow_html=True,
         )
+        _pay_html = (
+            "<div class=\"board-wrap\"><table class=\"board\">"
+            "<thead><tr>" + _hdrs5 + "</tr></thead><tbody>"
+            + "".join(pay_row_parts)
+            + "</tbody></table></div>"
+        )
+        st.markdown(_pay_html, unsafe_allow_html=True)
