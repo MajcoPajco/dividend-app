@@ -1017,6 +1017,7 @@ if _add_stock_msg:
 
 # ============================================================
 # SEKCIA 3 - MOJE AKCIE
+# Numericke stlpce ulozene ako float -> spravne zoradenie
 # ============================================================
 
 st.markdown("#### Moje akcie")
@@ -1034,11 +1035,12 @@ else:
                 st.session_state.holdings_exchange.get(tkr) or "N/A"
             )
             country_str = "N/A"
-            div_rocne_str = "N/A"
-            growth_strs = {
-                "1m": "N/A", "3m": "N/A", "6m": "N/A",
-                "1y": "N/A", "5y": "N/A",
-            }
+            pct_annual_val = None
+            g1m = None
+            g3m = None
+            g6m = None
+            g1y = None
+            g5y = None
         else:
             price_str = (
                 "{:.2f} {}".format(
@@ -1048,21 +1050,17 @@ else:
             name = rec["name"]
             exchange_str = rec["exchange"]
             country_str = rec["country"]
-            pct_annual = None
+            pct_annual_val = None
             if rec.get("annual_rate") is not None and rec.get("price"):
-                pct_annual = rec["annual_rate"] / rec["price"] * 100
-            if pct_annual is not None:
-                div_rocne_str = "{:.2f} %".format(pct_annual)
-            else:
-                div_rocne_str = "N/A"
+                pct_annual_val = (
+                    rec["annual_rate"] / rec["price"] * 100
+                )
             growth = rec.get("growth") or {}
-            growth_strs = {
-                "1m": format_growth(growth.get("1m")),
-                "3m": format_growth(growth.get("3m")),
-                "6m": format_growth(growth.get("6m")),
-                "1y": format_growth(growth.get("1y")),
-                "5y": format_growth(growth.get("5y")),
-            }
+            g1m = growth.get("1m")
+            g3m = growth.get("3m")
+            g6m = growth.get("6m")
+            g1y = growth.get("1y")
+            g5y = growth.get("5y")
 
         holdings_rows.append({
             "Ticker": tkr,
@@ -1070,28 +1068,35 @@ else:
             "Burza": exchange_str,
             "Stat": country_str,
             "Aktualna cena": price_str,
-            "Rast 1M [%]": growth_strs["1m"],
-            "Rast 3M [%]": growth_strs["3m"],
-            "Rast 6M [%]": growth_strs["6m"],
-            "Rast 1R [%]": growth_strs["1y"],
-            "Rast 5R [%]": growth_strs["5y"],
-            "Div.Rocne[%]": div_rocne_str,
-            "Mnozstvo": format_qty(qty),
+            "Rast 1M [%]": g1m,
+            "Rast 3M [%]": g3m,
+            "Rast 6M [%]": g6m,
+            "Rast 1R [%]": g1y,
+            "Rast 5R [%]": g5y,
+            "Div.Rocne[%]": pct_annual_val,
+            "Mnozstvo": qty,
         })
 
     holdings_df = pd.DataFrame(holdings_rows)
+
     _growth_cols = [
         "Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]",
         "Rast 1R [%]", "Rast 5R [%]",
     ]
 
     def _style_growth_cell(val):
-        if not isinstance(val, str):
+        if val is None:
             return ""
-        if val.startswith("+"):
-            return "color: #15a24a; font-weight: 600;"
-        if val.startswith("-"):
-            return "color: #e0362b; font-weight: 600;"
+        try:
+            fval = float(val)
+            if pd.isna(fval):
+                return ""
+            if fval > 0:
+                return "color: #15a24a; font-weight: 600;"
+            if fval < 0:
+                return "color: #e0362b; font-weight: 600;"
+        except Exception:
+            pass
         return ""
 
     try:
@@ -1103,23 +1108,53 @@ else:
             _style_growth_cell, subset=_growth_cols
         )
 
-    # 20 riadkov x 35px + hlavicka 38px = 738px
     edited_df = st.data_editor(
         styled_holdings,
         column_config={
-            "Ticker": st.column_config.TextColumn(disabled=True),
-            "Meno firmy": st.column_config.TextColumn(disabled=True),
-            "Burza": st.column_config.TextColumn(disabled=True),
-            "Stat": st.column_config.TextColumn(disabled=True),
-            "Aktualna cena": st.column_config.TextColumn(disabled=True),
-            "Rast 1M [%]": st.column_config.TextColumn(disabled=True),
-            "Rast 3M [%]": st.column_config.TextColumn(disabled=True),
-            "Rast 6M [%]": st.column_config.TextColumn(disabled=True),
-            "Rast 1R [%]": st.column_config.TextColumn(disabled=True),
-            "Rast 5R [%]": st.column_config.TextColumn(disabled=True),
-            "Div.Rocne[%]": st.column_config.TextColumn(disabled=True),
-            "Mnozstvo": st.column_config.TextColumn(
-                help="Zadaj mnozstvo."
+            "Ticker": st.column_config.TextColumn(
+                disabled=True,
+            ),
+            "Meno firmy": st.column_config.TextColumn(
+                disabled=True,
+            ),
+            "Burza": st.column_config.TextColumn(
+                disabled=True,
+            ),
+            "Stat": st.column_config.TextColumn(
+                disabled=True,
+            ),
+            "Aktualna cena": st.column_config.TextColumn(
+                disabled=True,
+            ),
+            "Rast 1M [%]": st.column_config.NumberColumn(
+                format="%.2f %%",
+                disabled=True,
+            ),
+            "Rast 3M [%]": st.column_config.NumberColumn(
+                format="%.2f %%",
+                disabled=True,
+            ),
+            "Rast 6M [%]": st.column_config.NumberColumn(
+                format="%.2f %%",
+                disabled=True,
+            ),
+            "Rast 1R [%]": st.column_config.NumberColumn(
+                format="%.2f %%",
+                disabled=True,
+            ),
+            "Rast 5R [%]": st.column_config.NumberColumn(
+                format="%.2f %%",
+                disabled=True,
+            ),
+            "Div.Rocne[%]": st.column_config.NumberColumn(
+                format="%.2f %%",
+                disabled=True,
+            ),
+            "Mnozstvo": st.column_config.NumberColumn(
+                format="%.4f",
+                step=0.0001,
+                min_value=0.0,
+                help="Zadaj mnozstvo.",
             ),
         },
         hide_index=True,
@@ -1129,9 +1164,8 @@ else:
     )
 
     for _, row in edited_df.iterrows():
-        raw = str(row["Mnozstvo"]).replace(",", ".").strip()
         try:
-            new_qty = float(raw)
+            new_qty = float(row["Mnozstvo"] or 0)
         except Exception:
             new_qty = float(
                 st.session_state.holdings.get(row["Ticker"], 0)
