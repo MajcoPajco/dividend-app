@@ -1099,6 +1099,7 @@ else:
             _style_growth_cell, subset=_growth_cols
         )
 
+    # ── 20 riadkov × 35 px + hlavicka 38 px = 738 px ──
     edited_df = st.data_editor(
         styled_holdings,
         column_config={
@@ -1119,6 +1120,7 @@ else:
         },
         hide_index=True,
         use_container_width=True,
+        height=740,
         key="holdings_editor",
     )
 
@@ -1281,9 +1283,10 @@ else:
 
 # ============================================================
 # SEKCIA 5 - VYPLACANE DIVIDENDY
-# Limit 30 riadkov.
+# Medzera pred sekciou. Limit 30 riadkov.
 # ============================================================
 
+st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Vyplacane dividendy")
 
 if not st.session_state.holdings:
