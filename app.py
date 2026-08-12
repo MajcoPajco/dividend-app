@@ -185,7 +185,7 @@ def lookup_exchange(exchange_code, fallback_name=None):
     return (fallback_name or exchange_code or "N/A", "N/A")
 
 
-# ── SK-locale formatovacie helper funkcie ─────────────────────────────────────
+# ── SK-locale formatovacie helper funkcie ──────────────────────────────────────
 
 def parse_qty_input(text):
     """
@@ -196,7 +196,7 @@ def parse_qty_input(text):
     if text is None:
         return None
     s = str(text).strip().replace("\xa0", "").replace(" ", "")
-    s = s.replace(",", ".")          # ciarka -> bodka pre float()
+    s = s.replace(",", ".")
     if not s:
         return None
     try:
@@ -322,7 +322,7 @@ def _connect_gsheet():
             ws = sh.worksheet("Holdings")
         except gspread.WorksheetNotFound:
             ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
-            ws.update([GSHEET_HEADER])
+            ws.update([GSHEET_HEADER], value_input_option="RAW")
         msg = "Pripojene k: " + sh.title
         return ws, {"ok": True, "detail": msg}
     except Exception as e:
@@ -341,10 +341,13 @@ def load_holdings():
                 tkr = str(r.get("Ticker", "")).strip().upper()
                 if not tkr:
                     continue
-                try:
-                    qty = float(r.get("Qty", 0) or 0)
-                except Exception:
+                # Nacitana hodnota moze byt int, float alebo string
+                raw_qty = r.get("Qty", 0)
+                if raw_qty == "" or raw_qty is None:
                     qty = 0.0
+                else:
+                    parsed = parse_qty_input(str(raw_qty))
+                    qty = parsed if parsed is not None else 0.0
                 result[tkr] = {
                     "qty": qty,
                     "exchange": r.get("Exchange", ""),
@@ -371,11 +374,13 @@ def save_holdings(holdings, exchanges):
     if ws is not None:
         try:
             rows = [GSHEET_HEADER] + [
-                [tkr, qty, exchanges.get(tkr, "")]
+                # Explicitne float + value_input_option RAW = Google Sheets
+                # ulozi cislo presne tak ako je, bez lokalnej interpretacie
+                [tkr, float(qty), exchanges.get(tkr, "")]
                 for tkr, qty in holdings.items()
             ]
             ws.clear()
-            ws.update(rows)
+            ws.update(rows, value_input_option="RAW")
             n = str(len(holdings))
             t = datetime.now().strftime("%H:%M:%S")
             msg = "Ulozene do GSheets (" + n + " pozicii) o " + t
@@ -394,7 +399,7 @@ def save_holdings(holdings, exchanges):
             "ok": False, "detail": msg
         }
     data = {
-        tkr: {"qty": qty, "exchange": exchanges.get(tkr, "")}
+        tkr: {"qty": float(qty), "exchange": exchanges.get(tkr, "")}
         for tkr, qty in holdings.items()
     }
     try:
@@ -946,7 +951,7 @@ def _on_add_stock_click():
         st.session_state.get("add_isin_field") or ""
     ).strip().upper()
 
-    # ── Parsovanie mnozstva: akceptujeme ',' aj '.' ako desatinnu ciarku ──
+    # Parsovanie mnozstva: akceptujeme ',' aj '.' ako desatinnu ciarku
     qty_raw = str(st.session_state.get("add_qty_field") or "").strip()
     qty_val = parse_qty_input(qty_raw)
 
@@ -963,7 +968,9 @@ def _on_add_stock_click():
         return
 
     if qty_val is None or qty_val == 0:
-        if qty_raw and qty_raw not in ("0", "0,0", "0.0", "0,00", "0.00"):
+        if qty_raw and qty_raw not in (
+            "0", "0,0", "0.0", "0,00", "0.00"
+        ):
             msg = (
                 "Neplatne mnozstvo '{}'. "
                 "Zadaj cislo, napr. 1,5 alebo -0,5."
@@ -1032,7 +1039,7 @@ def _on_add_stock_click():
 
     st.session_state["add_ticker_field"] = ""
     st.session_state["add_isin_field"] = ""
-    st.session_state["add_qty_field"] = ""   # "" pre text_input
+    st.session_state["add_qty_field"] = ""
 
 
 c1, c2, c3, c4 = st.columns([2.3, 2.3, 1.6, 1])
@@ -1053,8 +1060,7 @@ with c2:
         on_change=_sync_ticker_from_isin,
     )
 with c3:
-    # ── ZMENENE: text_input namiesto number_input ──────────────────────────
-    # Akceptuje desatinnu ciarku aj bodku: '1,5' aj '1.5'
+    # text_input namiesto number_input — akceptuje ',' aj '.' ako desatinnu ciarku
     st.text_input(
         "Mnozstvo",
         placeholder="Mnozstvo, napr. 1,5",
@@ -1110,7 +1116,6 @@ else:
             g5y_str = "N/A"
             div_pct_str = "N/A"
         else:
-            # Cena so SK desatinnou ciarkou
             price_str = fmt_curr(rec["price"], rec["currency"], decimals=2)
             name = rec["name"]
             exchange_str = rec["exchange"]
@@ -1121,7 +1126,6 @@ else:
                     rec["annual_rate"] / rec["price"] * 100
                 )
             growth = rec.get("growth") or {}
-            # Rast formatovany ako string so SK desatinnou ciarkou
             g1m_str = format_growth(growth.get("1m"))
             g3m_str = format_growth(growth.get("3m"))
             g6m_str = format_growth(growth.get("6m"))
@@ -1154,14 +1158,13 @@ else:
 
     def _style_growth_cell(val):
         """
-        Farbi bunky rastu - funguje aj pre stringove hodnoty
-        napr. '+1,23 %' alebo '-0,45 %'.
+        Farbi bunky rastu podla hodnoty.
+        Funguje pre stringove hodnoty napr. '+1,23 %' alebo '-0,45 %'.
         """
         if val is None or val == "" or val == "N/A":
             return ""
         if isinstance(val, str):
             try:
-                # Parsujeme cislo zo SK-formatovaneho stringu
                 num_str = (
                     val.replace(" ", "")
                        .replace("%", "")
@@ -1175,7 +1178,6 @@ else:
             except Exception:
                 pass
             return ""
-        # Fallback pre pripad, ze by hodnota bola numerická
         try:
             fval = float(val)
             if pd.isna(fval):
@@ -1205,7 +1207,7 @@ else:
             "Burza": st.column_config.TextColumn(disabled=True),
             "Stat": st.column_config.TextColumn(disabled=True),
             "Aktualna cena": st.column_config.TextColumn(disabled=True),
-            # Rastu su teraz TextColumn so SK-formatovanymi hodnotami
+            # Rastu su TextColumn so SK-formatovanymi hodnotami
             "Rast 1M [%]": st.column_config.TextColumn(disabled=True),
             "Rast 3M [%]": st.column_config.TextColumn(disabled=True),
             "Rast 6M [%]": st.column_config.TextColumn(disabled=True),
@@ -1303,7 +1305,6 @@ else:
         div_rows = div_rows[:40]
         div_row_parts = []
         for r in div_rows:
-            # Vsetky cisla formatujeme so SK desatinnou ciarkou
             last_div_str = fmt_curr(r["last_div"], r["currency"], decimals=4)
             pct_last_str = fmt_pct(r["pct_last"])
             pct_annual_str = fmt_pct(r["pct_annual"])
@@ -1431,7 +1432,6 @@ else:
         pay_rows = pay_rows[:30]
         pay_row_parts = []
         for r in pay_rows:
-            # Vsetky cisla so SK desatinnou ciarkou
             pct_annual_str = fmt_pct(r["pct_annual"])
             last_div_str = fmt_curr(
                 r["last_div"], r["currency"], decimals=4
