@@ -185,9 +185,65 @@ def lookup_exchange(exchange_code, fallback_name=None):
     return (fallback_name or exchange_code or "N/A", "N/A")
 
 
+# ── SK-locale formatovacie helper funkcie ─────────────────────────────────────
+
+def parse_qty_input(text):
+    """
+    Sparsuje mnozstvo zo zadaneho textu.
+    Akceptuje desatinnu bodku aj ciarku: '1.5' aj '1,5' -> 1.5
+    Vracia float alebo None ak je vstup prazdny / nesparsovatelny.
+    """
+    if text is None:
+        return None
+    s = str(text).strip().replace("\xa0", "").replace(" ", "")
+    s = s.replace(",", ".")          # ciarka -> bodka pre float()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def fmt_num(val, decimals=2):
+    """
+    Naformatuje cislo s CIARKOU ako desatinnym oddelovacom (SK format).
+    Vracia 'N/A' pre None alebo NaN.
+    """
+    if val is None:
+        return "N/A"
+    try:
+        fval = float(val)
+        if pd.isna(fval):
+            return "N/A"
+        return "{:.{}f}".format(fval, decimals).replace(".", ",")
+    except Exception:
+        return "N/A"
+
+
+def fmt_curr(val, currency, decimals=4):
+    """Naformatuje penaznu hodnotu so SK desatinnou ciarkou."""
+    n = fmt_num(val, decimals)
+    if n == "N/A":
+        return "N/A"
+    return (n + " " + str(currency)).strip()
+
+
+def fmt_pct(val, decimals=2):
+    """Naformatuje percentualnu hodnotu so SK desatinnou ciarkou."""
+    n = fmt_num(val, decimals)
+    if n == "N/A":
+        return "N/A"
+    return n + " %"
+
+
 def format_qty(q):
+    """
+    Naformatuje mnozstvo bez koncovych nul a so SK desatinnou ciarkou.
+    Pr.: 1.5 -> '1,5',  1.0 -> '1',  0.0001 -> '0,0001'
+    """
     s = "{:.4f}".format(q).rstrip("0").rstrip(".")
-    return s if s else "0"
+    return (s if s else "0").replace(".", ",")
 
 
 def _pct_change_over_period(hist, months=None, years=None):
@@ -220,10 +276,14 @@ def _pct_change_over_period(hist, months=None, years=None):
 
 
 def format_growth(val):
+    """
+    Naformatuje rast v % so SK desatinnou ciarkou.
+    Pr.: 1.234 -> '+1,23 %',  -0.456 -> '-0,46 %',  None -> 'N/A'
+    """
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return "N/A"
     sign = "+" if val >= 0 else ""
-    return sign + "{:.2f} %".format(val)
+    return (sign + "{:.2f} %".format(val)).replace(".", ",")
 
 
 def growth_cell_html(val):
@@ -885,7 +945,10 @@ def _on_add_stock_click():
     isin_clean = (
         st.session_state.get("add_isin_field") or ""
     ).strip().upper()
-    qty_val = st.session_state.get("add_qty_field")
+
+    # ── Parsovanie mnozstva: akceptujeme ',' aj '.' ako desatinnu ciarku ──
+    qty_raw = str(st.session_state.get("add_qty_field") or "").strip()
+    qty_val = parse_qty_input(qty_raw)
 
     if not ticker_clean and isin_clean:
         info = lookup_ticker_by_isin(isin_clean)
@@ -898,10 +961,16 @@ def _on_add_stock_click():
             "warning", "Zadaj ticker alebo ISIN akcie."
         )
         return
+
     if qty_val is None or qty_val == 0:
-        st.session_state["add_stock_msg"] = (
-            "warning", "Zadaj mnozstvo rozne od 0."
-        )
+        if qty_raw and qty_raw not in ("0", "0,0", "0.0", "0,00", "0.00"):
+            msg = (
+                "Neplatne mnozstvo '{}'. "
+                "Zadaj cislo, napr. 1,5 alebo -0,5."
+            ).format(qty_raw)
+        else:
+            msg = "Zadaj mnozstvo rozne od 0."
+        st.session_state["add_stock_msg"] = ("warning", msg)
         return
 
     if qty_val > 0:
@@ -963,7 +1032,7 @@ def _on_add_stock_click():
 
     st.session_state["add_ticker_field"] = ""
     st.session_state["add_isin_field"] = ""
-    st.session_state["add_qty_field"] = None
+    st.session_state["add_qty_field"] = ""   # "" pre text_input
 
 
 c1, c2, c3, c4 = st.columns([2.3, 2.3, 1.6, 1])
@@ -984,12 +1053,11 @@ with c2:
         on_change=_sync_ticker_from_isin,
     )
 with c3:
-    st.number_input(
+    # ── ZMENENE: text_input namiesto number_input ──────────────────────────
+    # Akceptuje desatinnu ciarku aj bodku: '1,5' aj '1.5'
+    st.text_input(
         "Mnozstvo",
-        step=0.0001,
-        value=None,
-        format="%.4f",
-        placeholder="Mnozstvo",
+        placeholder="Mnozstvo, napr. 1,5",
         label_visibility="collapsed",
         key="add_qty_field",
     )
@@ -1002,7 +1070,8 @@ with c4:
 
 st.caption(
     "Staci vyplnit ticker ALEBO ISIN - druhe pole sa dohlada. "
-    "Kladne mnozstvo = nakup, zaporne = predaj."
+    "Kladne mnozstvo = nakup, zaporne = predaj. "
+    "Desatinna ciarka aj bodka su prijate (napr. 1,5 alebo 1.5)."
 )
 
 _add_sync_msg = st.session_state.pop("add_sync_msg", None)
@@ -1034,18 +1103,15 @@ else:
                 st.session_state.holdings_exchange.get(tkr) or "N/A"
             )
             country_str = "N/A"
-            pct_annual_val = None
-            g1m = None
-            g3m = None
-            g6m = None
-            g1y = None
-            g5y = None
+            g1m_str = "N/A"
+            g3m_str = "N/A"
+            g6m_str = "N/A"
+            g1y_str = "N/A"
+            g5y_str = "N/A"
+            div_pct_str = "N/A"
         else:
-            price_str = (
-                "{:.2f} {}".format(
-                    rec["price"], rec["currency"]
-                ).strip()
-            )
+            # Cena so SK desatinnou ciarkou
+            price_str = fmt_curr(rec["price"], rec["currency"], decimals=2)
             name = rec["name"]
             exchange_str = rec["exchange"]
             country_str = rec["country"]
@@ -1055,11 +1121,13 @@ else:
                     rec["annual_rate"] / rec["price"] * 100
                 )
             growth = rec.get("growth") or {}
-            g1m = growth.get("1m")
-            g3m = growth.get("3m")
-            g6m = growth.get("6m")
-            g1y = growth.get("1y")
-            g5y = growth.get("5y")
+            # Rast formatovany ako string so SK desatinnou ciarkou
+            g1m_str = format_growth(growth.get("1m"))
+            g3m_str = format_growth(growth.get("3m"))
+            g6m_str = format_growth(growth.get("6m"))
+            g1y_str = format_growth(growth.get("1y"))
+            g5y_str = format_growth(growth.get("5y"))
+            div_pct_str = fmt_pct(pct_annual_val)
 
         holdings_rows.append({
             "Ticker": tkr,
@@ -1067,13 +1135,14 @@ else:
             "Burza": exchange_str,
             "Stat": country_str,
             "Aktualna cena": price_str,
-            "Rast 1M [%]": g1m,
-            "Rast 3M [%]": g3m,
-            "Rast 6M [%]": g6m,
-            "Rast 1R [%]": g1y,
-            "Rast 5R [%]": g5y,
-            "Div.Rocne[%]": pct_annual_val,
-            "Mnozstvo": qty,
+            "Rast 1M [%]": g1m_str,
+            "Rast 3M [%]": g3m_str,
+            "Rast 6M [%]": g6m_str,
+            "Rast 1R [%]": g1y_str,
+            "Rast 5R [%]": g5y_str,
+            "Div.Rocne[%]": div_pct_str,
+            # Mnozstvo ako SK-formatovany string (napr. '1,5')
+            "Mnozstvo": format_qty(qty),
         })
 
     holdings_df = pd.DataFrame(holdings_rows)
@@ -1084,8 +1153,29 @@ else:
     ]
 
     def _style_growth_cell(val):
-        if val is None:
+        """
+        Farbi bunky rastu - funguje aj pre stringove hodnoty
+        napr. '+1,23 %' alebo '-0,45 %'.
+        """
+        if val is None or val == "" or val == "N/A":
             return ""
+        if isinstance(val, str):
+            try:
+                # Parsujeme cislo zo SK-formatovaneho stringu
+                num_str = (
+                    val.replace(" ", "")
+                       .replace("%", "")
+                       .replace(",", ".")
+                )
+                fval = float(num_str)
+                if fval > 0:
+                    return "color: #15a24a; font-weight: 600;"
+                if fval < 0:
+                    return "color: #e0362b; font-weight: 600;"
+            except Exception:
+                pass
+            return ""
+        # Fallback pre pripad, ze by hodnota bola numerická
         try:
             fval = float(val)
             if pd.isna(fval):
@@ -1115,29 +1205,20 @@ else:
             "Burza": st.column_config.TextColumn(disabled=True),
             "Stat": st.column_config.TextColumn(disabled=True),
             "Aktualna cena": st.column_config.TextColumn(disabled=True),
-            "Rast 1M [%]": st.column_config.NumberColumn(
-                format="%.2f %%", disabled=True,
-            ),
-            "Rast 3M [%]": st.column_config.NumberColumn(
-                format="%.2f %%", disabled=True,
-            ),
-            "Rast 6M [%]": st.column_config.NumberColumn(
-                format="%.2f %%", disabled=True,
-            ),
-            "Rast 1R [%]": st.column_config.NumberColumn(
-                format="%.2f %%", disabled=True,
-            ),
-            "Rast 5R [%]": st.column_config.NumberColumn(
-                format="%.2f %%", disabled=True,
-            ),
-            "Div.Rocne[%]": st.column_config.NumberColumn(
-                format="%.2f %%", disabled=True,
-            ),
-            "Mnozstvo": st.column_config.NumberColumn(
-                format="%.4f",
-                step=0.0001,
-                min_value=0.0,
-                help="Zadaj mnozstvo.",
+            # Rastu su teraz TextColumn so SK-formatovanymi hodnotami
+            "Rast 1M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 3M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 6M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 1R [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 5R [%]": st.column_config.TextColumn(disabled=True),
+            "Div.Rocne[%]": st.column_config.TextColumn(disabled=True),
+            # Mnozstvo: editovatelny TextColumn, akceptuje ',' aj '.'
+            "Mnozstvo": st.column_config.TextColumn(
+                help=(
+                    "Zadaj mnozstvo. Desatinna ciarka aj bodka su "
+                    "prijate, napr. 1,5 alebo 1.5"
+                ),
+                max_chars=20,
             ),
         },
         hide_index=True,
@@ -1146,14 +1227,23 @@ else:
         key="holdings_editor",
     )
 
+    # Spracovanie zmien mnozstva v tabulke
     for _, row in edited_df.iterrows():
-        try:
-            new_qty = float(row["Mnozstvo"] or 0)
-        except Exception:
+        ticker = row["Ticker"]
+        qty_raw = row.get("Mnozstvo")
+        if qty_raw is None or str(qty_raw).strip() == "":
+            # Prazdna bunka -> zachovame povodnu hodnotu
             new_qty = float(
-                st.session_state.holdings.get(row["Ticker"], 0)
+                st.session_state.holdings.get(ticker, 0)
             )
-        st.session_state.holdings[row["Ticker"]] = max(0.0, new_qty)
+        else:
+            new_qty = parse_qty_input(str(qty_raw))
+            if new_qty is None:
+                # Nesparsovatelny vstup -> zachovame povodnu hodnotu
+                new_qty = float(
+                    st.session_state.holdings.get(ticker, 0)
+                )
+        st.session_state.holdings[ticker] = max(0.0, new_qty)
 
     save_holdings(
         st.session_state.holdings,
@@ -1162,7 +1252,6 @@ else:
 
 # ============================================================
 # SEKCIA 4 - NAJBLIZZSIE EX-DIV DATUMY
-# Hodnoty vzdy pre 1 akciu. Limit 40 riadkov.
 # ============================================================
 
 st.markdown("#### Najblizzsie Ex-Div datumy")
@@ -1211,32 +1300,18 @@ else:
         )
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
-        # ── ZMENENE: limit zvyseny z 30 na 40 riadkov ──
         div_rows = div_rows[:40]
         div_row_parts = []
         for r in div_rows:
-            if r["last_div"] is not None:
-                last_div_str = (
-                    "{:.4f} {}".format(
-                        r["last_div"], r["currency"]
-                    ).strip()
-                )
-            else:
-                last_div_str = "N/A"
-            if r["pct_last"] is not None:
-                pct_last_str = "{:.2f} %".format(r["pct_last"])
-            else:
-                pct_last_str = "N/A"
-            if r["pct_annual"] is not None:
-                pct_annual_str = "{:.2f} %".format(r["pct_annual"])
-            else:
-                pct_annual_str = "N/A"
+            # Vsetky cisla formatujeme so SK desatinnou ciarkou
+            last_div_str = fmt_curr(r["last_div"], r["currency"], decimals=4)
+            pct_last_str = fmt_pct(r["pct_last"])
+            pct_annual_str = fmt_pct(r["pct_annual"])
+
             if r["annual_rate"] is not None:
                 curr = r["currency"]
-                annual_div_str = (
-                    "{:.4f} {}".format(
-                        r["annual_rate"], curr
-                    ).strip()
+                annual_div_str = fmt_curr(
+                    r["annual_rate"], curr, decimals=4
                 )
                 _is_usd = curr.upper() == "USD" if curr else True
                 if not _is_usd:
@@ -1244,16 +1319,15 @@ else:
                     if rate_a is not None:
                         _uv = r["annual_rate"] * rate_a
                         annual_div_str += (
-                            " (~ USD {:.2f})".format(_uv)
+                            " (~ USD " + fmt_num(_uv, 2) + ")"
                         )
             else:
                 annual_div_str = "N/A"
+
             if r["expected"] is not None:
                 curr = r["currency"]
-                expected_str = (
-                    "{:.4f} {}".format(
-                        r["expected"], curr
-                    ).strip()
+                expected_str = fmt_curr(
+                    r["expected"], curr, decimals=4
                 )
                 _is_usd2 = curr.upper() == "USD" if curr else True
                 if not _is_usd2:
@@ -1261,10 +1335,11 @@ else:
                     if rate2 is not None:
                         _uv2 = r["expected"] * rate2
                         expected_str += (
-                            " (~ USD {:.4f})".format(_uv2)
+                            " (~ USD " + fmt_num(_uv2, 4) + ")"
                         )
             else:
                 expected_str = "N/A"
+
             growth = r.get("growth") or {}
             _cells = [
                 "<tr>",
@@ -1306,7 +1381,6 @@ else:
 
 # ============================================================
 # SEKCIA 5 - VYPLACANE DIVIDENDY
-# Medzera pred sekciou. Limit 30 riadkov.
 # ============================================================
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -1357,33 +1431,26 @@ else:
         pay_rows = pay_rows[:30]
         pay_row_parts = []
         for r in pay_rows:
-            if r["pct_annual"] is not None:
-                pct_annual_str = "{:.2f} %".format(r["pct_annual"])
-            else:
-                pct_annual_str = "N/A"
-            if r["last_div"] is not None:
-                last_div_str = (
-                    "{:.4f} {}".format(
-                        r["last_div"], r["currency"]
-                    ).strip()
-                )
-            else:
-                last_div_str = "N/A"
+            # Vsetky cisla so SK desatinnou ciarkou
+            pct_annual_str = fmt_pct(r["pct_annual"])
+            last_div_str = fmt_curr(
+                r["last_div"], r["currency"], decimals=4
+            )
+
             if r["total_div"] is not None:
                 curr = r["currency"]
-                total_div_str = (
-                    "{:.2f} {}".format(r["total_div"], curr).strip()
-                )
+                total_div_str = fmt_curr(r["total_div"], curr, decimals=2)
                 _is_usd3 = curr.upper() == "USD" if curr else True
                 if not _is_usd3:
                     rate3 = get_fx_to_usd_rate(curr)
                     if rate3 is not None:
                         _uv3 = r["total_div"] * rate3
                         total_div_str += (
-                            " (~ USD {:.2f})".format(_uv3)
+                            " (~ USD " + fmt_num(_uv3, 2) + ")"
                         )
             else:
                 total_div_str = "N/A"
+
             _pcells = [
                 "<tr>",
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>",
