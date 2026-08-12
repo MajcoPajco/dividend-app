@@ -196,6 +196,7 @@ def parse_qty_input(text):
     if text is None:
         return None
     s = str(text).strip().replace("\xa0", "").replace(" ", "")
+    # Nahradime ciarku bodkou pre standardne parsovanie
     s = s.replace(",", ".")
     if not s:
         return None
@@ -206,10 +207,7 @@ def parse_qty_input(text):
 
 
 def fmt_num(val, decimals=2):
-    """
-    Naformatuje cislo s CIARKOU ako desatinnym oddelovacom (SK format).
-    Vracia 'N/A' pre None alebo NaN.
-    """
+    """Naformatuje cislo s CIARKOU ako desatinnym oddelovacom (SK)."""
     if val is None:
         return "N/A"
     try:
@@ -240,9 +238,14 @@ def fmt_pct(val, decimals=2):
 def format_qty(q):
     """
     Naformatuje mnozstvo bez koncovych nul a so SK desatinnou ciarkou.
+    Pouziva sa LEN na zobrazenie, nie na ukladanie.
     Pr.: 1.5 -> '1,5',  1.0 -> '1',  0.0001 -> '0,0001'
     """
-    s = "{:.4f}".format(q).rstrip("0").rstrip(".")
+    try:
+        fq = float(q)
+    except Exception:
+        return "0"
+    s = "{:.5f}".format(fq).rstrip("0").rstrip(".")
     return (s if s else "0").replace(".", ",")
 
 
@@ -276,10 +279,7 @@ def _pct_change_over_period(hist, months=None, years=None):
 
 
 def format_growth(val):
-    """
-    Naformatuje rast v % so SK desatinnou ciarkou.
-    Pr.: 1.234 -> '+1,23 %',  -0.456 -> '-0,46 %',  None -> 'N/A'
-    """
+    """Naformatuje rast v % so SK desatinnou ciarkou."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return "N/A"
     sign = "+" if val >= 0 else ""
@@ -300,14 +300,11 @@ GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 @st.cache_resource(show_spinner=False)
 def _connect_gsheet():
     if gspread is None or _GoogleCredentials is None:
-        msg = "Kniznica gspread nie je nainstalovana."
-        return None, {"ok": False, "detail": msg}
+        return None, {"ok": False, "detail": "Kniznica gspread nie je nainstalovana."}
     if "gcp_service_account" not in st.secrets:
-        msg = "V st.secrets chyba gcp_service_account."
-        return None, {"ok": False, "detail": msg}
+        return None, {"ok": False, "detail": "V st.secrets chyba gcp_service_account."}
     if "gsheet_url" not in st.secrets:
-        msg = "V st.secrets chyba gsheet_url."
-        return None, {"ok": False, "detail": msg}
+        return None, {"ok": False, "detail": "V st.secrets chyba gsheet_url."}
     try:
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -323,11 +320,9 @@ def _connect_gsheet():
         except gspread.WorksheetNotFound:
             ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
             ws.update([GSHEET_HEADER], value_input_option="RAW")
-        msg = "Pripojene k: " + sh.title
-        return ws, {"ok": True, "detail": msg}
+        return ws, {"ok": True, "detail": "Pripojene k: " + sh.title}
     except Exception as e:
-        msg = "Chyba: " + type(e).__name__ + ": " + str(e)
-        return None, {"ok": False, "detail": msg}
+        return None, {"ok": False, "detail": "Chyba: " + type(e).__name__ + ": " + str(e)}
 
 
 def load_holdings():
@@ -341,11 +336,12 @@ def load_holdings():
                 tkr = str(r.get("Ticker", "")).strip().upper()
                 if not tkr:
                     continue
-                # Nacitana hodnota moze byt int, float alebo string
                 raw_qty = r.get("Qty", 0)
                 if raw_qty == "" or raw_qty is None:
                     qty = 0.0
                 else:
+                    # Nacitana hodnota moze byt int, float alebo string
+                    # Vzdy parsujeme cez parse_qty_input pre bezpecnost
                     parsed = parse_qty_input(str(raw_qty))
                     qty = parsed if parsed is not None else 0.0
                 result[tkr] = {
@@ -354,9 +350,9 @@ def load_holdings():
                 }
             return result
         except Exception as e:
-            msg = "Chyba citania GSheets: " + str(e)
             st.session_state["gsheet_status"] = {
-                "ok": False, "detail": msg
+                "ok": False,
+                "detail": "Chyba citania GSheets: " + str(e),
             }
     if not HOLDINGS_FILE.exists():
         return {}
@@ -369,34 +365,39 @@ def load_holdings():
 
 
 def save_holdings(holdings, exchanges):
+    """
+    Ulozi holdings do GSheets s value_input_option=RAW,
+    takze Google Sheets nikdy neinterpretuje bodku/ciarku
+    cez lokalnu konfiguraciu tabuľky.
+    Qty sa posiela ako Python float (napr. 3.1), nie ako string.
+    """
     ws, status = _connect_gsheet()
     st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
             rows = [GSHEET_HEADER] + [
-                # Explicitne float + value_input_option RAW = Google Sheets
-                # ulozi cislo presne tak ako je, bez lokalnej interpretacie
                 [tkr, float(qty), exchanges.get(tkr, "")]
                 for tkr, qty in holdings.items()
             ]
             ws.clear()
+            # RAW = Google Sheets ulozi cislo presne tak ako ho dostane
             ws.update(rows, value_input_option="RAW")
             n = str(len(holdings))
             t = datetime.now().strftime("%H:%M:%S")
-            msg = "Ulozene do GSheets (" + n + " pozicii) o " + t
             st.session_state["gsheet_last_write"] = {
-                "ok": True, "detail": msg
+                "ok": True,
+                "detail": "Ulozene do GSheets (" + n + " pozicii) o " + t,
             }
             return
         except Exception as e:
-            msg = "Zapis GSheets ZLYHAL: " + str(e)
             st.session_state["gsheet_last_write"] = {
-                "ok": False, "detail": msg
+                "ok": False,
+                "detail": "Zapis GSheets ZLYHAL: " + str(e),
             }
     else:
-        msg = "GSheets nie je pripojeny - lokalny subor."
         st.session_state["gsheet_last_write"] = {
-            "ok": False, "detail": msg
+            "ok": False,
+            "detail": "GSheets nie je pripojeny - lokalny subor.",
         }
     data = {
         tkr: {"qty": float(qty), "exchange": exchanges.get(tkr, "")}
@@ -423,22 +424,16 @@ def get_status(exchange, now_utc):
     is_weekday = now_local.weekday() < 5
     is_open = is_weekday and today_open <= now_local < today_close
     if is_open:
-        return {
-            "is_open": True,
-            "delta": now_local - today_open,
-            "local_time": now_local,
-        }
+        return {"is_open": True, "delta": now_local - today_open,
+                "local_time": now_local}
     if is_weekday and now_local < today_open:
         candidate = today_open
     else:
         candidate = today_open + timedelta(days=1)
     while candidate.weekday() >= 5:
         candidate += timedelta(days=1)
-    return {
-        "is_open": False,
-        "delta": candidate - now_local,
-        "local_time": now_local,
-    }
+    return {"is_open": False, "delta": candidate - now_local,
+            "local_time": now_local}
 
 
 def format_delta(delta):
@@ -510,19 +505,14 @@ def _lookup_ticker_by_isin_cached(isin_clean):
     quotes = search.quotes or []
     if not quotes:
         raise _LookupMiss("no quotes for " + isin_clean)
-    preferred = [
-        q for q in quotes
-        if q.get("quoteType") in ("EQUITY", "ETF")
-    ]
+    preferred = [q for q in quotes if q.get("quoteType") in ("EQUITY", "ETF")]
     best = (preferred or quotes)[0]
     symbol = best.get("symbol")
     if not symbol:
         raise _LookupMiss("no symbol for " + isin_clean)
     return {
         "symbol": symbol,
-        "name": (
-            best.get("shortname") or best.get("longname") or symbol
-        ),
+        "name": best.get("shortname") or best.get("longname") or symbol,
         "exchange": best.get("exchDisp") or "",
     }
 
@@ -544,10 +534,7 @@ def estimate_dividend_frequency(dividends):
     if len(recent) < 2:
         return "N/A"
     dates = list(recent.index)
-    gaps_days = [
-        (dates[i] - dates[i - 1]).days
-        for i in range(1, len(dates))
-    ]
+    gaps_days = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
     if not gaps_days:
         return "N/A"
     avg_gap = sum(gaps_days) / len(gaps_days)
@@ -574,10 +561,7 @@ _FREQ_BADGE_CLASS = {
 def freq_badge_html(freq):
     cls = _FREQ_BADGE_CLASS.get(freq)
     if cls:
-        return (
-            '<span class="freq-badge ' + cls + '">'
-            + freq + "</span>"
-        )
+        return '<span class="freq-badge ' + cls + '">' + freq + "</span>"
     return freq
 
 
@@ -617,18 +601,14 @@ def _parse_stock_info(ticker, info, dividends):
     ex_div_ts = info.get("exDividendDate")
     if ex_div_ts:
         try:
-            ex_div_date = datetime.fromtimestamp(
-                ex_div_ts, tz=timezone.utc
-            ).date()
+            ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).date()
         except Exception:
             ex_div_date = None
     pay_div_date = None
     pay_div_ts = info.get("dividendDate")
     if pay_div_ts:
         try:
-            pay_div_date = datetime.fromtimestamp(
-                pay_div_ts, tz=timezone.utc
-            ).date()
+            pay_div_date = datetime.fromtimestamp(pay_div_ts, tz=timezone.utc).date()
         except Exception:
             pay_div_date = None
     annual_rate = info.get("dividendRate")
@@ -645,9 +625,7 @@ def _parse_stock_info(ticker, info, dividends):
     if annual_rate is not None and price:
         dividend_yield_pct = annual_rate / price * 100
     if dividend_yield_pct is None:
-        dividend_yield_pct = _normalize_yield_pct(
-            info.get("dividendYield")
-        )
+        dividend_yield_pct = _normalize_yield_pct(info.get("dividendYield"))
     if dividend_yield_pct is None:
         dividend_yield_pct = _normalize_yield_pct(
             info.get("trailingAnnualDividendYield")
@@ -673,9 +651,7 @@ def _parse_stock_info(ticker, info, dividends):
 def _fetch_growth_data_cached_v4(ticker):
     t = yf.Ticker(ticker)
     try:
-        hist = t.history(
-            period="6y", interval="1d", auto_adjust=False
-        )["Close"]
+        hist = t.history(period="6y", interval="1d", auto_adjust=False)["Close"]
         hist = hist.dropna()
     except Exception:
         hist = None
@@ -710,8 +686,7 @@ def fetch_stock_data(ticker):
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.markdown(
-    "<style>.block-container{padding-top:1.2rem;}"
-    " h3{margin-bottom:0.4rem;}</style>",
+    "<style>.block-container{padding-top:1.2rem;} h3{margin-bottom:0.4rem;}</style>",
     unsafe_allow_html=True,
 )
 st.markdown("### Dividend tracker")
@@ -789,28 +764,21 @@ for _code in owned_codes:
     existing_cities.add(_ex_info["city"])
 
 exchanges_display = EXCHANGES + extras
-results = [
-    (ex, get_status(ex, now_utc)) for ex in exchanges_display
-]
-results.sort(
-    key=lambda item: (not item[1]["is_open"], item[1]["delta"])
-)
+results = [(ex, get_status(ex, now_utc)) for ex in exchanges_display]
+results.sort(key=lambda item: (not item[1]["is_open"], item[1]["delta"]))
 
 row_parts = []
 for ex, status in results:
     local_time_str = status["local_time"].strftime("%H:%M")
     if status["is_open"]:
         row_class = "row-open"
-        delta_str = format_delta(status["delta"]).upper()
-        stav = "OTVORENE &mdash; " + delta_str
+        stav = "OTVORENE &mdash; " + format_delta(status["delta"]).upper()
     else:
         row_class = "row-closed"
-        delta_str = format_delta(status["delta"]).upper()
-        stav = "ZATVORENE &mdash; O " + delta_str
+        stav = "ZATVORENE &mdash; O " + format_delta(status["delta"]).upper()
     _row = (
         "<tr class=\"" + row_class + "\">"
-        + "<td class=\"code-cell\">"
-        + ex["flag"] + " " + ex["code"] + "</td>"
+        + "<td class=\"code-cell\">" + ex["flag"] + " " + ex["code"] + "</td>"
         + "<td>" + ex["city"] + "</td>"
         + "<td>" + ex["country"] + "</td>"
         + "<td>" + local_time_str + "</td>"
@@ -819,56 +787,50 @@ for ex, status in results:
     )
     row_parts.append(_row)
 
-_t1_html = (
+st.markdown(
     "<div class=\"board-wrap\"><table class=\"board\">"
     "<thead><tr>"
     "<th>Burza</th><th>Mesto</th><th>Stat</th>"
     "<th>Miestny cas</th><th>Stav</th>"
     "</tr></thead><tbody>"
     + "".join(row_parts)
-    + "</tbody></table></div>"
+    + "</tbody></table></div>",
+    unsafe_allow_html=True,
 )
-st.markdown(_t1_html, unsafe_allow_html=True)
 
 # ============================================================
-# SEKCIA 2 - PRIDAT AKCIU
+# SEKCIA 2 - PRIDAT / ODOBRAT AKCIU
 # ============================================================
 
 _gs_status = st.session_state.get(
-    "gsheet_status",
-    {"ok": False, "detail": "Pripojenie sa este vykonava..."},
+    "gsheet_status", {"ok": False, "detail": "Pripojenie sa este vykonava..."}
 )
-_gs_last_write = st.session_state.get(
-    "gsheet_last_write", {"ok": None, "detail": ""}
-)
-
-_gs_detail = str(_gs_status.get("detail", ""))
-_lw_detail = str(_gs_last_write.get("detail", ""))
-_lw_ok = _gs_last_write.get("ok", None)
+_gs_last_write = st.session_state.get("gsheet_last_write", {"ok": None, "detail": ""})
 _NL = chr(10)
 
 if _gs_status["ok"]:
-    _status_line = "Ukladanie: **Google Sheets** ("
-    _status_line += _gs_detail
-    _status_line += ")"
+    _status_line = (
+        "Ukladanie: **Google Sheets** (" + str(_gs_status.get("detail", "")) + ")"
+    )
 else:
-    _status_line = "Ukladanie: **lokalny subor**"
-    _status_line += " - GSheets nie je aktivny ("
-    _status_line += _gs_detail
-    _status_line += ")"
+    _status_line = (
+        "Ukladanie: **lokalny subor** - GSheets nie je aktivny ("
+        + str(_gs_status.get("detail", ""))
+        + ")"
+    )
 
+_lw_ok = _gs_last_write.get("ok", None)
+_lw_detail = str(_gs_last_write.get("detail", ""))
 if _lw_ok is False:
     _status_line += "  " + _NL + "Posledny zapis: " + _lw_detail
 elif _lw_ok is True:
     _status_line += "  " + _NL + _lw_detail
 
-with st.expander(
-    "Diagnostika ukladania dat", expanded=not _gs_status["ok"]
-):
+with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_status_line)
     st.caption(
-        "Pozn.: pripojenie na GSheets sa skusa len raz za bezanie "
-        "appky. Ak si zmenil opravnenia, pouzij tlacidlo nizsie."
+        "Pozn.: pripojenie na GSheets sa skusa len raz za bezanie appky. "
+        "Ak si zmenil opravnenia, pouzij tlacidlo nizsie."
     )
     if st.button("Skusit pripojenie na GSheets znova"):
         _connect_gsheet.clear()
@@ -880,21 +842,15 @@ with st.expander(
     _backup_data = json.dumps(
         {
             tkr: {
-                "qty": qty,
-                "exchange": st.session_state.holdings_exchange.get(
-                    tkr, ""
-                ),
+                "qty": float(qty),
+                "exchange": st.session_state.holdings_exchange.get(tkr, ""),
             }
             for tkr, qty in st.session_state.holdings.items()
         },
         ensure_ascii=False,
         indent=2,
     )
-    _fname = (
-        "holdings_backup_"
-        + datetime.now().strftime("%Y%m%d_%H%M%S")
-        + ".json"
-    )
+    _fname = "holdings_backup_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json"
     st.download_button(
         "Stiahnut zalohu portfolia (JSON)",
         data=_backup_data,
@@ -902,13 +858,11 @@ with st.expander(
         mime="application/json",
     )
 
-st.markdown("#### Pridat akciu")
+st.markdown("#### Pridat / odobrat akciu")
 
 
 def _sync_isin_from_ticker():
-    t = (
-        st.session_state.get("add_ticker_field") or ""
-    ).strip().upper()
+    t = (st.session_state.get("add_ticker_field") or "").strip().upper()
     st.session_state["add_ticker_field"] = t
     if t:
         isin = lookup_isin_by_ticker(t)
@@ -916,42 +870,34 @@ def _sync_isin_from_ticker():
             st.session_state["add_isin_field"] = isin
             st.session_state["add_sync_msg"] = None
         else:
-            msg = (
+            st.session_state["add_sync_msg"] = (
+                "info",
                 "ISIN pre ticker sa nepodarilo dohladat. "
-                "Zadaj ho rucne - ISIN nie je nutny, staci ticker."
+                "Zadaj ho rucne - ISIN nie je nutny, staci ticker.",
             )
-            st.session_state["add_sync_msg"] = ("info", msg)
 
 
 def _sync_ticker_from_isin():
-    i = (
-        st.session_state.get("add_isin_field") or ""
-    ).strip().upper()
+    i = (st.session_state.get("add_isin_field") or "").strip().upper()
     st.session_state["add_isin_field"] = i
     if i:
         info = lookup_ticker_by_isin(i)
         if info:
-            st.session_state["add_ticker_field"] = (
-                info["symbol"].upper()
-            )
+            st.session_state["add_ticker_field"] = info["symbol"].upper()
             st.session_state["add_sync_msg"] = None
         else:
-            msg = (
+            st.session_state["add_sync_msg"] = (
+                "warning",
                 "Ticker pre ISIN sa nepodarilo najst. "
-                "Skontroluj ISIN alebo zadaj ticker rucne."
+                "Skontroluj ISIN alebo zadaj ticker rucne.",
             )
-            st.session_state["add_sync_msg"] = ("warning", msg)
 
 
 def _on_add_stock_click():
-    ticker_clean = (
-        st.session_state.get("add_ticker_field") or ""
-    ).strip().upper()
-    isin_clean = (
-        st.session_state.get("add_isin_field") or ""
-    ).strip().upper()
+    ticker_clean = (st.session_state.get("add_ticker_field") or "").strip().upper()
+    isin_clean = (st.session_state.get("add_isin_field") or "").strip().upper()
 
-    # Parsovanie mnozstva: akceptujeme ',' aj '.' ako desatinnu ciarku
+    # ── Parsovanie mnozstva: akceptujeme ',' aj '.' ako desatinnu ciarku ──
     qty_raw = str(st.session_state.get("add_qty_field") or "").strip()
     qty_val = parse_qty_input(qty_raw)
 
@@ -962,15 +908,11 @@ def _on_add_stock_click():
             st.session_state["add_ticker_field"] = ticker_clean
 
     if not ticker_clean:
-        st.session_state["add_stock_msg"] = (
-            "warning", "Zadaj ticker alebo ISIN akcie."
-        )
+        st.session_state["add_stock_msg"] = ("warning", "Zadaj ticker alebo ISIN akcie.")
         return
 
     if qty_val is None or qty_val == 0:
-        if qty_raw and qty_raw not in (
-            "0", "0,0", "0.0", "0,00", "0.00"
-        ):
+        if qty_raw and qty_raw not in ("0", "0,0", "0.0", "0,00", "0.00"):
             msg = (
                 "Neplatne mnozstvo '{}'. "
                 "Zadaj cislo, napr. 1,5 alebo -0,5."
@@ -981,61 +923,67 @@ def _on_add_stock_click():
         return
 
     if qty_val > 0:
+        # ── NAKUP ──
         new_data = fetch_stock_data(ticker_clean)
         if new_data is None:
-            msg = "Ticker " + ticker_clean + " sa nepodarilo najst."
-            st.session_state["add_stock_msg"] = ("error", msg)
-            return
-        st.session_state.holdings[ticker_clean] = (
-            st.session_state.holdings.get(ticker_clean, 0) + qty_val
-        )
-        st.session_state.holdings_exchange[ticker_clean] = (
-            new_data.get("exchange", "")
-        )
-        save_holdings(
-            st.session_state.holdings,
-            st.session_state.holdings_exchange,
-        )
-        msg = (
-            "Pridane: " + format_qty(qty_val)
-            + " ks " + ticker_clean
-            + " (" + new_data["name"] + ")"
-        )
-        st.session_state["add_stock_msg"] = ("success", msg)
-    else:
-        current_qty = st.session_state.holdings.get(ticker_clean, 0)
-        if current_qty <= 0:
-            msg = (
-                "Akcia " + ticker_clean
-                + " nie je vlastnena, nie je co odobrat."
+            st.session_state["add_stock_msg"] = (
+                "error", "Ticker " + ticker_clean + " sa nepodarilo najst."
             )
-            st.session_state["add_stock_msg"] = ("info", msg)
+            return
+        current = float(st.session_state.holdings.get(ticker_clean, 0))
+        new_total = current + qty_val
+        st.session_state.holdings[ticker_clean] = new_total
+        st.session_state.holdings_exchange[ticker_clean] = new_data.get("exchange", "")
+        save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
+        st.session_state["add_stock_msg"] = (
+            "success",
+            "Pridane: "
+            + format_qty(qty_val)
+            + " ks "
+            + ticker_clean
+            + " ("
+            + new_data["name"]
+            + "). Celkovo: "
+            + format_qty(new_total)
+            + " ks.",
+        )
+    else:
+        # ── PREDAJ ──
+        current_qty = float(st.session_state.holdings.get(ticker_clean, 0))
+        if current_qty <= 0:
+            st.session_state["add_stock_msg"] = (
+                "info",
+                "Akcia " + ticker_clean + " nie je vlastnena, nie je co odobrat.",
+            )
             return
         remove_qty = abs(qty_val)
         new_qty = current_qty - remove_qty
         if new_qty <= 0:
             del st.session_state.holdings[ticker_clean]
             st.session_state.holdings_exchange.pop(ticker_clean, None)
-            extra = ""
-            if remove_qty > current_qty:
-                extra = " (pozicia vynulovana)"
-            msg = (
-                "Odobrate vsetkych " + format_qty(current_qty)
-                + " ks " + ticker_clean + "." + extra
+            extra = " (pozicia vynulovana)" if remove_qty > current_qty else ""
+            st.session_state["add_stock_msg"] = (
+                "success",
+                "Odobrate vsetkych "
+                + format_qty(current_qty)
+                + " ks "
+                + ticker_clean
+                + "."
+                + extra,
             )
-            st.session_state["add_stock_msg"] = ("success", msg)
         else:
             st.session_state.holdings[ticker_clean] = new_qty
-            msg = (
-                "Odobrate " + format_qty(remove_qty)
-                + " ks " + ticker_clean
-                + ". Novy stav: " + format_qty(new_qty) + " ks."
+            st.session_state["add_stock_msg"] = (
+                "success",
+                "Odobrate "
+                + format_qty(remove_qty)
+                + " ks "
+                + ticker_clean
+                + ". Novy stav: "
+                + format_qty(new_qty)
+                + " ks.",
             )
-            st.session_state["add_stock_msg"] = ("success", msg)
-        save_holdings(
-            st.session_state.holdings,
-            st.session_state.holdings_exchange,
-        )
+        save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
 
     st.session_state["add_ticker_field"] = ""
     st.session_state["add_isin_field"] = ""
@@ -1060,7 +1008,6 @@ with c2:
         on_change=_sync_ticker_from_isin,
     )
 with c3:
-    # text_input namiesto number_input — akceptuje ',' aj '.' ako desatinnu ciarku
     st.text_input(
         "Mnozstvo",
         placeholder="Mnozstvo, napr. 1,5",
@@ -1068,30 +1015,26 @@ with c3:
         key="add_qty_field",
     )
 with c4:
-    st.button(
-        "Pridat",
-        use_container_width=True,
-        on_click=_on_add_stock_click,
-    )
+    st.button("Pridat", use_container_width=True, on_click=_on_add_stock_click)
 
 st.caption(
-    "Staci vyplnit ticker ALEBO ISIN - druhe pole sa dohlada. "
-    "Kladne mnozstvo = nakup, zaporne = predaj. "
-    "Desatinna ciarka aj bodka su prijate (napr. 1,5 alebo 1.5)."
+    "Staci vyplnit ticker ALEBO ISIN. "
+    "Kladne = nakup, zaporne = predaj. "
+    "Desatinna ciarka aj bodka su prijate (1,5 = 1.5)."
 )
 
 _add_sync_msg = st.session_state.pop("add_sync_msg", None)
 if _add_sync_msg:
-    _sync_kind, _sync_text = _add_sync_msg
-    getattr(st, _sync_kind)(_sync_text)
+    getattr(st, _add_sync_msg[0])(_add_sync_msg[1])
 
 _add_stock_msg = st.session_state.pop("add_stock_msg", None)
 if _add_stock_msg:
-    _msg_kind, _msg_text = _add_stock_msg
-    getattr(st, _msg_kind)(_msg_text)
+    getattr(st, _add_stock_msg[0])(_add_stock_msg[1])
 
 # ============================================================
-# SEKCIA 3 - MOJE AKCIE
+# SEKCIA 3 - MOJE AKCIE  (data_editor – iba na prezeranie)
+# DOLEZITE: Mnozstvo je disabled=True, ziadna slucka neupdatuje
+# session_state z editora – to by spôsobovalo korupciu dat!
 # ============================================================
 
 st.markdown("#### Moje akcie")
@@ -1105,15 +1048,9 @@ else:
         if rec is None:
             price_str = "N/A"
             name = tkr
-            exchange_str = (
-                st.session_state.holdings_exchange.get(tkr) or "N/A"
-            )
+            exchange_str = st.session_state.holdings_exchange.get(tkr) or "N/A"
             country_str = "N/A"
-            g1m_str = "N/A"
-            g3m_str = "N/A"
-            g6m_str = "N/A"
-            g1y_str = "N/A"
-            g5y_str = "N/A"
+            g1m_str = g3m_str = g6m_str = g1y_str = g5y_str = "N/A"
             div_pct_str = "N/A"
         else:
             price_str = fmt_curr(rec["price"], rec["currency"], decimals=2)
@@ -1122,9 +1059,7 @@ else:
             country_str = rec["country"]
             pct_annual_val = None
             if rec.get("annual_rate") is not None and rec.get("price"):
-                pct_annual_val = (
-                    rec["annual_rate"] / rec["price"] * 100
-                )
+                pct_annual_val = rec["annual_rate"] / rec["price"] * 100
             growth = rec.get("growth") or {}
             g1m_str = format_growth(growth.get("1m"))
             g3m_str = format_growth(growth.get("3m"))
@@ -1145,8 +1080,8 @@ else:
             "Rast 1R [%]": g1y_str,
             "Rast 5R [%]": g5y_str,
             "Div.Rocne[%]": div_pct_str,
-            # Mnozstvo ako SK-formatovany string (napr. '1,5')
-            "Mnozstvo": format_qty(qty),
+            # format_qty sa pouziva IBA na zobrazenie, nie na ulozenie
+            "Mnozstvo": format_qty(float(qty)),
         })
 
     holdings_df = pd.DataFrame(holdings_rows)
@@ -1157,37 +1092,19 @@ else:
     ]
 
     def _style_growth_cell(val):
-        """
-        Farbi bunky rastu podla hodnoty.
-        Funguje pre stringove hodnoty napr. '+1,23 %' alebo '-0,45 %'.
-        """
         if val is None or val == "" or val == "N/A":
             return ""
         if isinstance(val, str):
             try:
-                num_str = (
-                    val.replace(" ", "")
-                       .replace("%", "")
-                       .replace(",", ".")
+                fval = float(
+                    val.replace(" ", "").replace("%", "").replace(",", ".")
                 )
-                fval = float(num_str)
                 if fval > 0:
                     return "color: #15a24a; font-weight: 600;"
                 if fval < 0:
                     return "color: #e0362b; font-weight: 600;"
             except Exception:
                 pass
-            return ""
-        try:
-            fval = float(val)
-            if pd.isna(fval):
-                return ""
-            if fval > 0:
-                return "color: #15a24a; font-weight: 600;"
-            if fval < 0:
-                return "color: #e0362b; font-weight: 600;"
-        except Exception:
-            pass
         return ""
 
     try:
@@ -1199,28 +1116,28 @@ else:
             _style_growth_cell, subset=_growth_cols
         )
 
-    edited_df = st.data_editor(
+    # ── KLUCOVA OPRAVA: vsetky stlpce su disabled=True ──────────────────────
+    # data_editor sa pouziva IBA na zobrazenie (ako pekna tabulka so
+    # stylingom). Mnozstvo sa meni VYLUCNE cez formular vyssie.
+    # Tym eliminujeme korupciu: editor nikdy nezapisuje spatne do holdings.
+    st.data_editor(
         styled_holdings,
         column_config={
-            "Ticker": st.column_config.TextColumn(disabled=True),
-            "Meno firmy": st.column_config.TextColumn(disabled=True),
-            "Burza": st.column_config.TextColumn(disabled=True),
-            "Stat": st.column_config.TextColumn(disabled=True),
+            "Ticker":        st.column_config.TextColumn(disabled=True),
+            "Meno firmy":    st.column_config.TextColumn(disabled=True),
+            "Burza":         st.column_config.TextColumn(disabled=True),
+            "Stat":          st.column_config.TextColumn(disabled=True),
             "Aktualna cena": st.column_config.TextColumn(disabled=True),
-            # Rastu su TextColumn so SK-formatovanymi hodnotami
-            "Rast 1M [%]": st.column_config.TextColumn(disabled=True),
-            "Rast 3M [%]": st.column_config.TextColumn(disabled=True),
-            "Rast 6M [%]": st.column_config.TextColumn(disabled=True),
-            "Rast 1R [%]": st.column_config.TextColumn(disabled=True),
-            "Rast 5R [%]": st.column_config.TextColumn(disabled=True),
-            "Div.Rocne[%]": st.column_config.TextColumn(disabled=True),
-            # Mnozstvo: editovatelny TextColumn, akceptuje ',' aj '.'
-            "Mnozstvo": st.column_config.TextColumn(
-                help=(
-                    "Zadaj mnozstvo. Desatinna ciarka aj bodka su "
-                    "prijate, napr. 1,5 alebo 1.5"
-                ),
-                max_chars=20,
+            "Rast 1M [%]":   st.column_config.TextColumn(disabled=True),
+            "Rast 3M [%]":   st.column_config.TextColumn(disabled=True),
+            "Rast 6M [%]":   st.column_config.TextColumn(disabled=True),
+            "Rast 1R [%]":   st.column_config.TextColumn(disabled=True),
+            "Rast 5R [%]":   st.column_config.TextColumn(disabled=True),
+            "Div.Rocne[%]":  st.column_config.TextColumn(disabled=True),
+            # Mnozstvo je tiez disabled – meni sa cez formular
+            "Mnozstvo":      st.column_config.TextColumn(
+                disabled=True,
+                help="Mnozstvo zmen cez formular 'Pridat / odobrat akciu' vyssie.",
             ),
         },
         hide_index=True,
@@ -1228,29 +1145,9 @@ else:
         height=740,
         key="holdings_editor",
     )
-
-    # Spracovanie zmien mnozstva v tabulke
-    for _, row in edited_df.iterrows():
-        ticker = row["Ticker"]
-        qty_raw = row.get("Mnozstvo")
-        if qty_raw is None or str(qty_raw).strip() == "":
-            # Prazdna bunka -> zachovame povodnu hodnotu
-            new_qty = float(
-                st.session_state.holdings.get(ticker, 0)
-            )
-        else:
-            new_qty = parse_qty_input(str(qty_raw))
-            if new_qty is None:
-                # Nesparsovatelny vstup -> zachovame povodnu hodnotu
-                new_qty = float(
-                    st.session_state.holdings.get(ticker, 0)
-                )
-        st.session_state.holdings[ticker] = max(0.0, new_qty)
-
-    save_holdings(
-        st.session_state.holdings,
-        st.session_state.holdings_exchange,
-    )
+    # ── ZIADNA SLUCKA, ZIADNY save_holdings tu ──────────────────────────────
+    # Predchadzajuci kod tu updatoval session_state z editora a volal
+    # save_holdings() pri kazdom renderi – to bola pricina korupcie.
 
 # ============================================================
 # SEKCIA 4 - NAJBLIZZSIE EX-DIV DATUMY
@@ -1259,9 +1156,7 @@ else:
 st.markdown("#### Najblizzsie Ex-Div datumy")
 
 if not st.session_state.holdings:
-    st.info(
-        "Pridaj akcie vyssie, aby sa tu zobrazil prehlad dividend."
-    )
+    st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad dividend.")
 else:
     today = datetime.now(timezone.utc).date()
     div_rows = []
@@ -1275,10 +1170,7 @@ else:
         last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
         currency = rec["currency"]
-        if last_div is not None and price:
-            pct_last = last_div / price * 100
-        else:
-            pct_last = None
+        pct_last = (last_div / price * 100) if (last_div is not None and price) else None
         pct_annual = rec.get("dividend_yield_pct")
         if pct_annual is None and annual_rate is not None and price:
             pct_annual = annual_rate / price * 100
@@ -1297,9 +1189,7 @@ else:
         })
 
     if not div_rows:
-        st.info(
-            "Ziadna akcia nema aktualne oznameny buduci Ex-Div datum."
-        )
+        st.info("Ziadna akcia nema aktualne oznameny buduci Ex-Div datum.")
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
         div_rows = div_rows[:40]
@@ -1311,59 +1201,48 @@ else:
 
             if r["annual_rate"] is not None:
                 curr = r["currency"]
-                annual_div_str = fmt_curr(
-                    r["annual_rate"], curr, decimals=4
-                )
-                _is_usd = curr.upper() == "USD" if curr else True
-                if not _is_usd:
+                annual_div_str = fmt_curr(r["annual_rate"], curr, decimals=4)
+                if curr.upper() != "USD":
                     rate_a = get_fx_to_usd_rate(curr)
                     if rate_a is not None:
-                        _uv = r["annual_rate"] * rate_a
-                        annual_div_str += (
-                            " (~ USD " + fmt_num(_uv, 2) + ")"
-                        )
+                        annual_div_str += " (~ USD " + fmt_num(r["annual_rate"] * rate_a, 2) + ")"
             else:
                 annual_div_str = "N/A"
 
             if r["expected"] is not None:
                 curr = r["currency"]
-                expected_str = fmt_curr(
-                    r["expected"], curr, decimals=4
-                )
-                _is_usd2 = curr.upper() == "USD" if curr else True
-                if not _is_usd2:
+                expected_str = fmt_curr(r["expected"], curr, decimals=4)
+                if curr.upper() != "USD":
                     rate2 = get_fx_to_usd_rate(curr)
                     if rate2 is not None:
-                        _uv2 = r["expected"] * rate2
-                        expected_str += (
-                            " (~ USD " + fmt_num(_uv2, 4) + ")"
-                        )
+                        expected_str += " (~ USD " + fmt_num(r["expected"] * rate2, 4) + ")"
             else:
                 expected_str = "N/A"
 
             growth = r.get("growth") or {}
-            _cells = [
-                "<tr>",
-                "<td class=\"code-cell\">" + r["ticker"] + "</td>",
-                "<td>" + r["name"] + "</td>",
-                "<td>1 ks</td>",
-                "<td>" + r["ex_date"].strftime("%d/%m/%y") + "</td>",
-                "<td>" + freq_badge_html(r["frequency"]) + "</td>",
-                "<td>" + growth_cell_html(growth.get("1m")) + "</td>",
-                "<td>" + growth_cell_html(growth.get("3m")) + "</td>",
-                "<td>" + growth_cell_html(growth.get("6m")) + "</td>",
-                "<td>" + growth_cell_html(growth.get("1y")) + "</td>",
-                "<td>" + growth_cell_html(growth.get("5y")) + "</td>",
-                "<td>" + last_div_str + "</td>",
-                "<td>" + annual_div_str + "</td>",
-                "<td>" + pct_last_str + "</td>",
-                "<td>" + pct_annual_str + "</td>",
-                "<td>" + expected_str + "</td>",
-                "</tr>",
-            ]
-            div_row_parts.append("".join(_cells))
+            div_row_parts.append(
+                "<tr>"
+                + "<td class=\"code-cell\">" + r["ticker"] + "</td>"
+                + "<td>" + r["name"] + "</td>"
+                + "<td>1 ks</td>"
+                + "<td>" + r["ex_date"].strftime("%d/%m/%y") + "</td>"
+                + "<td>" + freq_badge_html(r["frequency"]) + "</td>"
+                + "<td>" + growth_cell_html(growth.get("1m")) + "</td>"
+                + "<td>" + growth_cell_html(growth.get("3m")) + "</td>"
+                + "<td>" + growth_cell_html(growth.get("6m")) + "</td>"
+                + "<td>" + growth_cell_html(growth.get("1y")) + "</td>"
+                + "<td>" + growth_cell_html(growth.get("5y")) + "</td>"
+                + "<td>" + last_div_str + "</td>"
+                + "<td>" + annual_div_str + "</td>"
+                + "<td>" + pct_last_str + "</td>"
+                + "<td>" + pct_annual_str + "</td>"
+                + "<td>" + expected_str + "</td>"
+                + "</tr>"
+            )
 
-        _hdrs4 = (
+        st.markdown(
+            "<div class=\"board-wrap\"><table class=\"board\">"
+            "<thead><tr>"
             "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
             "<th>Ex-Div Date</th><th>Frekvencia</th>"
             "<th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th>"
@@ -1371,14 +1250,11 @@ else:
             "<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>"
             "<th>% k cene</th><th>Div Yield</th>"
             "<th>Ocak. vynos/akcia</th>"
-        )
-        _div_html = (
-            "<div class=\"board-wrap\"><table class=\"board\">"
-            "<thead><tr>" + _hdrs4 + "</tr></thead><tbody>"
+            "</tr></thead><tbody>"
             + "".join(div_row_parts)
-            + "</tbody></table></div>"
+            + "</tbody></table></div>",
+            unsafe_allow_html=True,
         )
-        st.markdown(_div_html, unsafe_allow_html=True)
 
 # ============================================================
 # SEKCIA 5 - VYPLACANE DIVIDENDY
@@ -1388,9 +1264,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Vyplacane dividendy")
 
 if not st.session_state.holdings:
-    st.info(
-        "Pridaj akcie vyssie, aby sa tu zobrazil prehlad vyplat."
-    )
+    st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad vyplat.")
 else:
     today_pay = datetime.now(timezone.utc).date()
     pay_rows = []
@@ -1407,14 +1281,11 @@ else:
         pct_annual = rec.get("dividend_yield_pct")
         if pct_annual is None and annual_rate is not None and price:
             pct_annual = annual_rate / price * 100
-        if last_div is not None:
-            total_div = last_div * qty
-        else:
-            total_div = None
+        total_div = (last_div * float(qty)) if last_div is not None else None
         pay_rows.append({
             "ticker": tkr,
             "name": rec["name"],
-            "qty": qty,
+            "qty": float(qty),
             "pay_date": rec["pay_div_date"],
             "frequency": rec["frequency"],
             "pct_annual": pct_annual,
@@ -1424,57 +1295,47 @@ else:
         })
 
     if not pay_rows:
-        st.info(
-            "Ziadna akcia nema oznameny buduci datum vyplaty dividendy."
-        )
+        st.info("Ziadna akcia nema oznameny buduci datum vyplaty dividendy.")
     else:
         pay_rows.sort(key=lambda r: r["pay_date"])
         pay_rows = pay_rows[:30]
         pay_row_parts = []
         for r in pay_rows:
             pct_annual_str = fmt_pct(r["pct_annual"])
-            last_div_str = fmt_curr(
-                r["last_div"], r["currency"], decimals=4
-            )
+            last_div_str = fmt_curr(r["last_div"], r["currency"], decimals=4)
 
             if r["total_div"] is not None:
                 curr = r["currency"]
                 total_div_str = fmt_curr(r["total_div"], curr, decimals=2)
-                _is_usd3 = curr.upper() == "USD" if curr else True
-                if not _is_usd3:
+                if curr.upper() != "USD":
                     rate3 = get_fx_to_usd_rate(curr)
                     if rate3 is not None:
-                        _uv3 = r["total_div"] * rate3
-                        total_div_str += (
-                            " (~ USD " + fmt_num(_uv3, 2) + ")"
-                        )
+                        total_div_str += " (~ USD " + fmt_num(r["total_div"] * rate3, 2) + ")"
             else:
                 total_div_str = "N/A"
 
-            _pcells = [
-                "<tr>",
-                "<td class=\"code-cell\">" + r["ticker"] + "</td>",
-                "<td>" + r["name"] + "</td>",
-                "<td>" + format_qty(r["qty"]) + " ks</td>",
-                "<td>" + r["pay_date"].strftime("%d/%m/%y") + "</td>",
-                "<td>" + freq_badge_html(r["frequency"]) + "</td>",
-                "<td>" + pct_annual_str + "</td>",
-                "<td>" + last_div_str + "</td>",
-                "<td>" + total_div_str + "</td>",
-                "</tr>",
-            ]
-            pay_row_parts.append("".join(_pcells))
+            pay_row_parts.append(
+                "<tr>"
+                + "<td class=\"code-cell\">" + r["ticker"] + "</td>"
+                + "<td>" + r["name"] + "</td>"
+                + "<td>" + format_qty(r["qty"]) + " ks</td>"
+                + "<td>" + r["pay_date"].strftime("%d/%m/%y") + "</td>"
+                + "<td>" + freq_badge_html(r["frequency"]) + "</td>"
+                + "<td>" + pct_annual_str + "</td>"
+                + "<td>" + last_div_str + "</td>"
+                + "<td>" + total_div_str + "</td>"
+                + "</tr>"
+            )
 
-        _hdrs5 = (
+        st.markdown(
+            "<div class=\"board-wrap\"><table class=\"board\">"
+            "<thead><tr>"
             "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
             "<th>Div Date</th><th>Frekvencia</th>"
             "<th>Rocny Div Yield</th>"
             "<th>Dividenda/akcia</th><th>Dividenda/spolu</th>"
-        )
-        _pay_html = (
-            "<div class=\"board-wrap\"><table class=\"board\">"
-            "<thead><tr>" + _hdrs5 + "</tr></thead><tbody>"
+            "</tr></thead><tbody>"
             + "".join(pay_row_parts)
-            + "</tbody></table></div>"
+            + "</tbody></table></div>",
+            unsafe_allow_html=True,
         )
-        st.markdown(_pay_html, unsafe_allow_html=True)
