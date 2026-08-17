@@ -1437,12 +1437,26 @@ else:
         total_hist = df_hist["amount_usd"].sum()
         n_years_covered = max(df_hist["year"].nunique(), 1)
 
+        current_year = today_h.year
+        ytd_hist = df_hist[df_hist["year"] == current_year]["amount_usd"].sum()
+        months_elapsed = today_h.month
+        avg_month_ytd = ytd_hist / months_elapsed if months_elapsed else 0.0
+
         colH1, colH2 = st.columns([1, 3])
         with colH1:
             st.metric("Spolu za 5 rokov (odhad)", fmt_curr(total_hist, "USD", 2))
             st.metric(
                 "Priemerne rocne",
                 fmt_curr(total_hist / n_years_covered, "USD", 2),
+            )
+            st.metric(
+                "Priemerne mesacne (rok " + str(current_year) + ")",
+                fmt_curr(avg_month_ytd, "USD", 2),
+                help=(
+                    "Sucet dividend od zaciatku roku " + str(current_year)
+                    + " do dnes, delene poctom doterajsich mesiacov ("
+                    + str(months_elapsed) + ")."
+                ),
             )
         with colH2:
             st.markdown(
