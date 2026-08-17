@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import streamlit as st
 import pandas as pd
+import altair as alt
 import yfinance as yf
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -745,6 +746,43 @@ def project_future_dividend_dates(rec, today, horizon_end, max_events=12):
     return events
 
 
+def make_usd_bar_chart(series, x_title, height=320, bar_color="#2f6fed"):
+    """
+    Postavi Altair bar chart so zvacsenym pismom na osiach a s tooltip-om
+    formatovanym ako mena (znacka $, presne 2 desatinne miesta).
+    'series' je pandas Series so sumami v USD, indexovana napr. mesiacom
+    alebo rokom ('x_title' je nazov tejto osi).
+    """
+    df_plot = series.reset_index()
+    df_plot.columns = [x_title, "Suma (USD)"]
+    return (
+        alt.Chart(df_plot)
+        .mark_bar(color=bar_color)
+        .encode(
+            x=alt.X(
+                x_title + ":O",
+                title=x_title,
+                sort=None,
+                axis=alt.Axis(labelFontSize=14, titleFontSize=16,
+                               labelAngle=-60),
+            ),
+            y=alt.Y(
+                "Suma (USD):Q",
+                title="Suma (USD)",
+                axis=alt.Axis(labelFontSize=14, titleFontSize=16,
+                               format="$,.2f"),
+            ),
+            tooltip=[
+                alt.Tooltip(x_title + ":O", title=x_title),
+                alt.Tooltip("Suma (USD):Q", title="Suma (USD)",
+                            format="$,.2f"),
+            ],
+        )
+        .properties(height=height)
+        .configure_axis(labelFontSize=14, titleFontSize=16)
+    )
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.markdown(
@@ -779,6 +817,14 @@ st.markdown(
     ".freq-semiannual{background:#fceceb;color:#c2453c;}"
     ".growth-pos{color:#15a24a;font-weight:600;}"
     ".growth-neg{color:#e0362b;font-weight:600;}"
+    ".section-note{font-size:15px;line-height:1.55;color:#5b6472;"
+    "margin-bottom:12px;}"
+    ".chart-label{font-size:17px;font-weight:700;color:#1a1f28;"
+    "margin:4px 0 8px 0;}"
+    "#vg-tooltip-element{font-size:16px !important;line-height:1.5 !important;}"
+    "#vg-tooltip-element table td{font-size:16px !important;"
+    "padding:3px 8px !important;}"
+    "#vg-tooltip-element table th{font-size:16px !important;}"
     "</style>",
     unsafe_allow_html=True,
 )
@@ -1338,13 +1384,15 @@ else:
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Historia vyplatenych dividend")
-st.caption(
-    "Odhad na zaklade AKTUALNE drzaneho mnozstva akcii a oficialnych "
-    "historickych ex-div datumov a vysok dividend. Appka nesleduje "
-    "historicke zmeny velkosti pozicie, takze ide o priblizny prepocet "
-    "(akoby si dane mnozstvo akcii drzal/a pocas celeho obdobia), nie "
-    "o realnu historiu tvojich vlastnych vyplat. Prepocet na USD "
-    "pouziva aktualny FX kurz, nie historicky."
+st.markdown(
+    "<div class=\"section-note\">Odhad na zaklade AKTUALNE drzaneho "
+    "mnozstva akcii a oficialnych historickych ex-div datumov a vysok "
+    "dividend. Appka nesleduje historicke zmeny velkosti pozicie, takze "
+    "ide o priblizny prepocet (akoby si dane mnozstvo akcii drzal/a "
+    "pocas celeho obdobia), nie o realnu historiu tvojich vlastnych "
+    "vyplat. Prepocet na USD pouziva aktualny FX kurz, nie "
+    "historicky.</div>",
+    unsafe_allow_html=True,
 )
 
 if not st.session_state.holdings:
@@ -1386,9 +1434,8 @@ else:
         df_hist["year"] = df_hist["date"].apply(lambda d: d.year)
 
         monthly_hist = df_hist.groupby("month")["amount_usd"].sum().sort_index()
-        yearly_hist = df_hist.groupby("year")["amount_usd"].sum().sort_index()
         total_hist = df_hist["amount_usd"].sum()
-        n_years_covered = max(len(yearly_hist), 1)
+        n_years_covered = max(df_hist["year"].nunique(), 1)
 
         colH1, colH2 = st.columns([1, 3])
         with colH1:
@@ -1398,11 +1445,14 @@ else:
                 fmt_curr(total_hist / n_years_covered, "USD", 2),
             )
         with colH2:
-            st.caption("Mesacny prijem z dividend (USD)")
-            st.bar_chart(monthly_hist)
-
-        st.caption("Rocny prijem z dividend (USD)")
-        st.bar_chart(yearly_hist)
+            st.markdown(
+                "<div class=\"chart-label\">Mesacny prijem z dividend (USD)</div>",
+                unsafe_allow_html=True,
+            )
+            st.altair_chart(
+                make_usd_bar_chart(monthly_hist, "month"),
+                use_container_width=True,
+            )
 
         with st.expander("Detailny prehlad podla akcie a mesiaca"):
             pivot_hist = df_hist.pivot_table(
@@ -1420,12 +1470,14 @@ else:
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Ocakavane buduce dividendove prijmy")
-st.caption(
-    "Prvy termin pri kazdej akcii je oficialne oznameny buduci ex-div "
-    "datum (ak je dostupny) - teda uz potvrdena udalost. Dalsie terminy "
-    "su len ODHAD, dopocitany na zaklade zistenej frekvencie vyplacania "
-    "a poslednej znamej vysky dividendy na akciu. Skutocna vyska aj "
-    "datum buducich vyplat sa mozu zmenit."
+st.markdown(
+    "<div class=\"section-note\">Prvy termin pri kazdej akcii je "
+    "oficialne oznameny buduci ex-div datum (ak je dostupny) - teda uz "
+    "potvrdena udalost. Dalsie terminy su len ODHAD, dopocitany na "
+    "zaklade zistenej frekvencie vyplacania a poslednej znamej vysky "
+    "dividendy na akciu. Skutocna vyska aj datum buducich vyplat sa "
+    "mozu zmenit.</div>",
+    unsafe_allow_html=True,
 )
 
 if not st.session_state.holdings:
@@ -1471,8 +1523,15 @@ else:
         with colF1:
             st.metric("Ocakavane za 12 mesiacov", fmt_curr(total_proj, "USD", 2))
         with colF2:
-            st.caption("Ocakavany mesacny prijem z dividend (USD)")
-            st.bar_chart(monthly_proj)
+            st.markdown(
+                "<div class=\"chart-label\">Ocakavany mesacny prijem z "
+                "dividend (USD)</div>",
+                unsafe_allow_html=True,
+            )
+            st.altair_chart(
+                make_usd_bar_chart(monthly_proj, "month"),
+                use_container_width=True,
+            )
 
         df_proj_sorted = df_proj.sort_values("date")
         proj_row_parts = []
