@@ -646,6 +646,7 @@ def _parse_stock_info(ticker, info, dividends):
         "annual_rate": annual_rate,
         "dividend_yield_pct": dividend_yield_pct,
         "frequency": frequency,
+        "dividends_history": dividends,
     }
 
 
@@ -682,6 +683,66 @@ def fetch_stock_data(ticker):
         return _fetch_stock_data_cached(ticker)
     except Exception:
         return None
+
+
+# ── Projekcia buducich dividend ─────────────────────────────────────────────
+
+FREQ_INTERVAL_DAYS = {
+    "Mesacne": 30,
+    "Stvrtrocne": 91,
+    "Polrocne": 182,
+    "Rocne": 365,
+}
+
+
+def project_future_dividend_dates(rec, today, horizon_end, max_events=12):
+    """
+    Vrati zoznam ocakavanych buducich ex-div terminov pre danu akciu.
+
+    Prvy termin (ak existuje) je OFICIALNE OZNAMENY buduci ex-div datum
+    (rec['ex_div_date']) - teda uz potvrdena udalost. Vsetky dalsie
+    terminy su len ODHAD, dopocitany na zaklade zistenej frekvencie
+    vyplacania (rec['frequency']) a poslednej znamej vysky dividendy
+    (rec['last_div_amount']). Ak akcia nema ziadny potvrdeny buduci
+    ex-div datum, projekcia sa zacne od posledneho historickeho datumu
+    + interval podla frekvencie.
+
+    Vracia zoznam dictov {"date": date, "confirmed": bool}, zoradenych
+    chronologicky, orezany na 'horizon_end' a max 'max_events' poloziek.
+    """
+    if rec.get("last_div_amount") is None:
+        return []
+
+    interval = FREQ_INTERVAL_DAYS.get(rec.get("frequency"))
+    events = []
+    cursor = None
+
+    known_date = rec.get("ex_div_date")
+    if known_date is not None and today <= known_date <= horizon_end:
+        events.append({"date": known_date, "confirmed": True})
+        cursor = known_date
+    else:
+        divs = rec.get("dividends_history")
+        if divs is not None and len(divs) > 0 and interval:
+            candidate = divs.index[-1].date() + timedelta(days=interval)
+            guard = 0
+            while candidate <= today and guard < 200:
+                candidate += timedelta(days=interval)
+                guard += 1
+            if candidate <= horizon_end:
+                events.append({"date": candidate, "confirmed": False})
+                cursor = candidate
+
+    if cursor is None or not interval:
+        return events
+
+    while len(events) < max_events:
+        cursor = cursor + timedelta(days=interval)
+        if cursor > horizon_end:
+            break
+        events.append({"date": cursor, "confirmed": False})
+
+    return events
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -1270,3 +1331,177 @@ else:
             + "</tbody></table></div>",
             unsafe_allow_html=True,
         )
+
+# ============================================================
+# SEKCIA 6 – HISTORIA VYPLATENYCH DIVIDEND (posledne roky)
+# ============================================================
+
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown("#### Historia vyplatenych dividend")
+st.caption(
+    "Odhad na zaklade AKTUALNE drzaneho mnozstva akcii a oficialnych "
+    "historickych ex-div datumov a vysok dividend. Appka nesleduje "
+    "historicke zmeny velkosti pozicie, takze ide o priblizny prepocet "
+    "(akoby si dane mnozstvo akcii drzal/a pocas celeho obdobia), nie "
+    "o realnu historiu tvojich vlastnych vyplat. Prepocet na USD "
+    "pouziva aktualny FX kurz, nie historicky."
+)
+
+if not st.session_state.holdings:
+    st.info("Pridaj akcie vyssie, aby sa tu zobrazila historia dividend.")
+else:
+    today_h = datetime.now(timezone.utc).date()
+    start_h = (pd.Timestamp(today_h) - pd.DateOffset(years=5)).date()
+
+    hist_rows = []
+    for tkr, qty in st.session_state.holdings.items():
+        rec = stock_records.get(tkr)
+        if rec is None:
+            continue
+        divs = rec.get("dividends_history")
+        if divs is None or len(divs) == 0:
+            continue
+        currency = rec["currency"]
+        fx = get_fx_to_usd_rate(currency) or 1.0
+        qty_f = float(qty)
+        for ts, amount in divs.items():
+            d = ts.date()
+            if d < start_h or d > today_h:
+                continue
+            amount = float(amount)
+            if amount <= 0:
+                continue
+            hist_rows.append({
+                "date": d, "ticker": tkr, "qty": qty_f,
+                "amount_per_share": amount, "currency": currency,
+                "amount_local": amount * qty_f,
+                "amount_usd": amount * qty_f * fx,
+            })
+
+    if not hist_rows:
+        st.info("Za poslednych 5 rokov sa nenasli ziadne vyplatene dividendy pre drzane akcie.")
+    else:
+        df_hist = pd.DataFrame(hist_rows)
+        df_hist["month"] = df_hist["date"].apply(lambda d: d.strftime("%Y-%m"))
+        df_hist["year"] = df_hist["date"].apply(lambda d: d.year)
+
+        monthly_hist = df_hist.groupby("month")["amount_usd"].sum().sort_index()
+        yearly_hist = df_hist.groupby("year")["amount_usd"].sum().sort_index()
+        total_hist = df_hist["amount_usd"].sum()
+        n_years_covered = max(len(yearly_hist), 1)
+
+        colH1, colH2 = st.columns([1, 3])
+        with colH1:
+            st.metric("Spolu za 5 rokov (odhad)", fmt_curr(total_hist, "USD", 2))
+            st.metric(
+                "Priemerne rocne",
+                fmt_curr(total_hist / n_years_covered, "USD", 2),
+            )
+        with colH2:
+            st.caption("Mesacny prijem z dividend (USD)")
+            st.bar_chart(monthly_hist)
+
+        st.caption("Rocny prijem z dividend (USD)")
+        st.bar_chart(yearly_hist)
+
+        with st.expander("Detailny prehlad podla akcie a mesiaca"):
+            pivot_hist = df_hist.pivot_table(
+                index="month", columns="ticker",
+                values="amount_usd", aggfunc="sum", fill_value=0.0,
+            ).sort_index()
+            st.dataframe(
+                pivot_hist.style.format("{:.2f}"),
+                use_container_width=True,
+            )
+
+# ============================================================
+# SEKCIA 7 – OCAKAVANE BUDUCE DIVIDENDOVE PRIJMY
+# ============================================================
+
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown("#### Ocakavane buduce dividendove prijmy")
+st.caption(
+    "Prvy termin pri kazdej akcii je oficialne oznameny buduci ex-div "
+    "datum (ak je dostupny) - teda uz potvrdena udalost. Dalsie terminy "
+    "su len ODHAD, dopocitany na zaklade zistenej frekvencie vyplacania "
+    "a poslednej znamej vysky dividendy na akciu. Skutocna vyska aj "
+    "datum buducich vyplat sa mozu zmenit."
+)
+
+if not st.session_state.holdings:
+    st.info("Pridaj akcie vyssie, aby sa tu zobrazila projekcia dividend.")
+else:
+    today_f = datetime.now(timezone.utc).date()
+    horizon_f = (pd.Timestamp(today_f) + pd.DateOffset(months=12)).date()
+
+    proj_rows = []
+    for tkr, qty in st.session_state.holdings.items():
+        rec = stock_records.get(tkr)
+        if rec is None:
+            continue
+        events = project_future_dividend_dates(rec, today_f, horizon_f)
+        if not events:
+            continue
+        currency = rec["currency"]
+        fx = get_fx_to_usd_rate(currency) or 1.0
+        last_div = rec.get("last_div_amount") or 0.0
+        qty_f = float(qty)
+        for ev in events:
+            proj_rows.append({
+                "date": ev["date"], "ticker": tkr, "name": rec["name"],
+                "qty": qty_f, "amount_per_share": last_div,
+                "currency": currency,
+                "amount_local": last_div * qty_f,
+                "amount_usd": last_div * qty_f * fx,
+                "confirmed": ev["confirmed"],
+            })
+
+    if not proj_rows:
+        st.info(
+            "Pre drzane akcie nie su dostupne data na projekciu "
+            "buducich dividend."
+        )
+    else:
+        df_proj = pd.DataFrame(proj_rows)
+        df_proj["month"] = df_proj["date"].apply(lambda d: d.strftime("%Y-%m"))
+        monthly_proj = df_proj.groupby("month")["amount_usd"].sum().sort_index()
+        total_proj = df_proj["amount_usd"].sum()
+
+        colF1, colF2 = st.columns([1, 3])
+        with colF1:
+            st.metric("Ocakavane za 12 mesiacov", fmt_curr(total_proj, "USD", 2))
+        with colF2:
+            st.caption("Ocakavany mesacny prijem z dividend (USD)")
+            st.bar_chart(monthly_proj)
+
+        df_proj_sorted = df_proj.sort_values("date")
+        proj_row_parts = []
+        for _, r in df_proj_sorted.iterrows():
+            amt_usd_str = fmt_curr(r["amount_usd"], "USD", 2)
+            amt_local_str = fmt_curr(r["amount_local"], r["currency"], 2)
+            status_html = (
+                "<span class=\"freq-badge freq-monthly\">Potvrdene</span>"
+                if r["confirmed"] else
+                "<span class=\"freq-badge freq-quarterly\">Odhad</span>"
+            )
+            proj_row_parts.append(
+                "<tr>"
+                "<td class=\"code-cell\">" + r["ticker"] + "</td>"
+                "<td>" + r["name"] + "</td>"
+                "<td>" + r["date"].strftime("%d/%m/%y") + "</td>"
+                "<td>" + status_html + "</td>"
+                "<td>" + format_qty(r["qty"]) + " ks</td>"
+                "<td>" + amt_local_str + "</td>"
+                "<td>" + amt_usd_str + "</td>"
+                "</tr>"
+            )
+        with st.expander("Detailny prehlad ocakavanych vyplat", expanded=False):
+            st.markdown(
+                "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
+                "<th>Ticker</th><th>Meno</th><th>Datum</th><th>Status</th>"
+                "<th>Mnozstvo</th><th>Suma/menou</th><th>Suma (USD)</th>"
+                "</tr></thead><tbody>"
+                + "".join(proj_row_parts)
+                + "</tbody></table></div>",
+                unsafe_allow_html=True,
+            )
