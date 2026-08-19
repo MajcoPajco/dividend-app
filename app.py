@@ -1244,6 +1244,11 @@ else:
         div_row_parts = []
         for r in div_rows:
             last_div_str = fmt_curr(r["last_div"], r["currency"], 4)
+            if r["last_div"] is not None and r["currency"].upper() != "USD":
+                rl = get_fx_to_usd_rate(r["currency"])
+                if rl:
+                    last_div_str += (" (~ USD "
+                                     + fmt_num(r["last_div"] * rl, 4) + ")")
             pct_last_str = fmt_pct(r["pct_last"])
             pct_annual_str = fmt_pct(r["pct_annual"])
             if r["annual_rate"] is not None:
