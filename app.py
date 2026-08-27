@@ -360,11 +360,16 @@ def _connect_gsheet():
         gc = gspread.authorize(creds)
         sh = gc.open_by_url(st.secrets["gsheet_url"])
         ws = _find_or_create_holdings_ws(sh)
-        n_rows = max(len(ws.get_all_values()) - 1, 0)
+        all_vals = ws.get_all_values()
+        n_rows = max(len(all_vals) - 1, 0)
+        header_row = all_vals[0] if all_vals else []
+        sample_row = all_vals[1] if len(all_vals) > 1 else []
         return ws, {
             "ok": True,
             "detail": ("Pripojene k: " + sh.title + " / list: " + ws.title
                        + " (" + str(n_rows) + " riadkov dat)"),
+            "header_row": header_row,
+            "sample_row": sample_row,
         }
     except Exception as e:
         return None, {"ok": False,
@@ -975,6 +980,19 @@ elif _gs_lw.get("ok") is True:
 
 with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_sline)
+    if _gs_status.get("header_row") is not None:
+        st.caption(
+            "Zistena hlavicka (1. riadok listu): "
+            + str(_gs_status.get("header_row"))
+        )
+        st.caption(
+            "Ukazka 2. riadku (prve data): "
+            + str(_gs_status.get("sample_row"))
+        )
+        st.caption(
+            "Appka ocakava stlpce presne: Ticker, Qty, Exchange "
+            "(na velkosti pismen nezalezi, ale nazov musi byt tento)."
+        )
     st.caption(
         "Pripojenie na GSheets sa skusa len raz za bezanie appky. "
         "Ak si zmenil opravnenia alebo dopisal data priamo v Google Sheets, "
