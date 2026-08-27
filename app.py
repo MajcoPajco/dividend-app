@@ -158,8 +158,6 @@ def lookup_exchange(exchange_code, fallback_name=None):
     return (fallback_name or exchange_code or "N/A", "N/A")
 
 
-# ── Formatovacie helper funkcie ───────────────────────────────────────────────
-
 def parse_qty_input(text):
     if text is None:
         return None
@@ -246,8 +244,6 @@ def growth_cell_html(val):
     return '<span class="' + cls + '">' + format_growth(val) + "</span>"
 
 
-# ── Suborove cesty a GSheets ──────────────────────────────────────────────────
-
 HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
 GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
@@ -270,7 +266,6 @@ def _connect_gsheet():
         )
         gc = gspread.authorize(creds)
         sh = gc.open_by_url(st.secrets["gsheet_url"])
-
         preferred_name = "Holdings"
         try:
             pref = st.secrets.get("gsheet_worksheet", "Holdings")
@@ -278,75 +273,51 @@ def _connect_gsheet():
                 preferred_name = str(pref)
         except Exception:
             pass
-
-        # Krok 1: preferovany nazov
         try:
             ws = sh.worksheet(preferred_name)
-            return ws, {
-                "ok": True,
-                "detail": "Pripojene k: " + sh.title + " | list: " + ws.title,
-            }
+            return ws, {"ok": True, "detail": "Pripojene k: " + sh.title + " | list: " + ws.title}
         except Exception:
             pass
-
-        # Krok 2: hlada list s Ticker v prvom riadku
         try:
             for candidate in sh.worksheets():
                 try:
                     first_row = [str(c).strip().lower() for c in candidate.row_values(1)]
                     if "ticker" in first_row or "symbol" in first_row:
-                        return candidate, {
-                            "ok": True,
-                            "detail": ("Pripojene k: " + sh.title
-                                       + " | list: " + candidate.title
-                                       + " (auto-detekcia)"),
-                        }
+                        det = "Pripojene k: " + sh.title + " | list: " + candidate.title + " (auto)"
+                        return candidate, {"ok": True, "detail": det}
                 except Exception:
                     continue
         except Exception:
             pass
-
-        # Krok 3: vytvori novy list
         try:
             ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
             ws.update([GSHEET_HEADER], value_input_option="RAW")
-            return ws, {
-                "ok": True,
-                "detail": "Vytvoreny novy list Holdings v: " + sh.title,
-            }
+            return ws, {"ok": True, "detail": "Vytvoreny novy list Holdings v: " + sh.title}
         except Exception as e:
             return None, {"ok": False, "detail": "Chyba vytvorenia listu: " + str(e)}
-
     except Exception as e:
-        return None, {
-            "ok": False,
-            "detail": "Chyba: " + type(e).__name__ + ": " + str(e),
-        }
+        return None, {"ok": False, "detail": "Chyba: " + type(e).__name__ + ": " + str(e)}
 
 
 def _safe_read_records(ws):
-    # Metoda 1
     try:
         recs = ws.get_all_records(value_render_option="UNFORMATTED_VALUE")
         if recs is not None:
             return recs
     except Exception:
         pass
-    # Metoda 2
     try:
         recs = ws.get_all_records(numericise_ignore=["ALL"])
         if recs is not None:
             return recs
     except Exception:
         pass
-    # Metoda 3
     try:
         recs = ws.get_all_records()
         if recs is not None:
             return recs
     except Exception:
         pass
-    # Metoda 4: manualny fallback s auto-detekciou hlavicky
     try:
         rows = ws.get_all_values()
         if not rows:
@@ -385,34 +356,16 @@ def _find_col(col_names, candidates):
 def load_holdings():
     ws, status = _connect_gsheet()
     st.session_state["gsheet_status"] = status
-
     if ws is not None:
         try:
             records = _safe_read_records(ws)
             col_names = list(records[0].keys()) if records else []
-
-            ticker_col = _find_col(col_names, [
-                "Ticker", "ticker", "TICKER",
-                "Symbol", "symbol", "SYMBOL", "Stock", "stock",
-            ])
-            qty_col = _find_col(col_names, [
-                "Qty", "qty", "QTY",
-                "Quantity", "quantity", "QUANTITY",
-                "Amount", "amount", "Shares", "shares",
-                "Pocet", "pocet", "Mnozstvo", "mnozstvo",
-            ])
-            exchange_col = _find_col(col_names, [
-                "Exchange", "exchange", "EXCHANGE",
-                "Burza", "burza", "Market", "market",
-            ])
-
+            ticker_col = _find_col(col_names, ["Ticker", "ticker", "TICKER", "Symbol", "symbol"])
+            qty_col = _find_col(col_names, ["Qty", "qty", "QTY", "Quantity", "quantity", "Shares", "shares", "Pocet", "pocet", "Mnozstvo", "mnozstvo"])
+            exchange_col = _find_col(col_names, ["Exchange", "exchange", "EXCHANGE", "Burza", "burza"])
             non_empty_tickers = 0
             if ticker_col:
-                non_empty_tickers = sum(
-                    1 for r in records
-                    if str(r.get(ticker_col, "")).strip()
-                )
-
+                non_empty_tickers = sum(1 for r in records if str(r.get(ticker_col, "")).strip())
             st.session_state["_gsheet_debug"] = {
                 "ws_title": getattr(ws, "title", "?"),
                 "records_count": len(records),
@@ -424,7 +377,6 @@ def load_holdings():
                 "sample": records[:3] if records else [],
                 "loaded_at": datetime.now().strftime("%H:%M:%S"),
             }
-
             if ticker_col is not None:
                 result = {}
                 for r in records:
@@ -437,38 +389,21 @@ def load_holdings():
                     else:
                         parsed = parse_qty_input(str(raw_qty))
                         qty = parsed if parsed is not None else 0.0
-                    result[tkr] = {
-                        "qty": qty,
-                        "exchange": str(
-                            r.get(exchange_col, "") if exchange_col else ""
-                        ).strip(),
-                    }
-
+                    exch_val = r.get(exchange_col, "") if exchange_col else ""
+                    result[tkr] = {"qty": qty, "exchange": str(exch_val).strip()}
                 if result:
                     try:
                         with open(HOLDINGS_FILE, "w", encoding="utf-8") as f:
                             json.dump(result, f, ensure_ascii=False, indent=2)
                     except Exception:
                         pass
-
                 return result
-
-            st.session_state["gsheet_status"] = {
-                "ok": True,
-                "detail": ("Pripojene, ale stlpec Ticker sa nenasiel. "
-                           "Stlpce: " + str(col_names)),
-            }
-
+            no_col_msg = "Pripojene, ale stlpec Ticker sa nenasiel. Stlpce: " + str(col_names)
+            st.session_state["gsheet_status"] = {"ok": True, "detail": no_col_msg}
         except Exception as e:
-            st.session_state["gsheet_status"] = {
-                "ok": False,
-                "detail": "Chyba citania: " + type(e).__name__ + ": " + str(e),
-            }
-            st.session_state["_gsheet_debug"] = {
-                "error": str(e),
-                "loaded_at": datetime.now().strftime("%H:%M:%S"),
-            }
-
+            err_msg = "Chyba citania: " + type(e).__name__ + ": " + str(e)
+            st.session_state["gsheet_status"] = {"ok": False, "detail": err_msg}
+            st.session_state["_gsheet_debug"] = {"error": str(e), "loaded_at": datetime.now().strftime("%H:%M:%S")}
     if HOLDINGS_FILE.exists():
         try:
             with open(HOLDINGS_FILE, "r", encoding="utf-8") as f:
@@ -502,33 +437,18 @@ def save_holdings(holdings, exchanges):
     st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
-            rows = [GSHEET_HEADER] + [
-                [tkr, float(qty), exchanges.get(tkr, "")]
-                for tkr, qty in holdings.items()
-            ]
+            rows = [GSHEET_HEADER] + [[tkr, float(qty), exchanges.get(tkr, "")] for tkr, qty in holdings.items()]
             ws.clear()
             ws.update(rows, value_input_option="RAW")
-            n = str(len(holdings))
             t = datetime.now().strftime("%H:%M:%S")
-            st.session_state["gsheet_last_write"] = {
-                "ok": True,
-                "detail": "Ulozene do GSheets (" + n + " pozicii) o " + t,
-            }
+            msg = "Ulozene do GSheets (" + str(len(holdings)) + " pozicii) o " + t
+            st.session_state["gsheet_last_write"] = {"ok": True, "detail": msg}
             return
         except Exception as e:
-            st.session_state["gsheet_last_write"] = {
-                "ok": False,
-                "detail": "Zapis GSheets ZLYHAL: " + str(e),
-            }
+            st.session_state["gsheet_last_write"] = {"ok": False, "detail": "Zapis ZLYHAL: " + str(e)}
     else:
-        st.session_state["gsheet_last_write"] = {
-            "ok": False,
-            "detail": "GSheets nie je pripojeny - lokalny subor.",
-        }
-    data = {
-        tkr: {"qty": float(qty), "exchange": exchanges.get(tkr, "")}
-        for tkr, qty in holdings.items()
-    }
+        st.session_state["gsheet_last_write"] = {"ok": False, "detail": "GSheets nie je pripojeny."}
+    data = {tkr: {"qty": float(qty), "exchange": exchanges.get(tkr, "")} for tkr, qty in holdings.items()}
     try:
         with open(HOLDINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -546,14 +466,11 @@ def get_status(exchange, now_utc):
     is_weekday = now_local.weekday() < 5
     is_open = is_weekday and today_open <= now_local < today_close
     if is_open:
-        return {"is_open": True, "delta": now_local - today_open,
-                "local_time": now_local}
-    candidate = today_open if (is_weekday and now_local < today_open) \
-        else today_open + timedelta(days=1)
+        return {"is_open": True, "delta": now_local - today_open, "local_time": now_local}
+    candidate = today_open if (is_weekday and now_local < today_open) else today_open + timedelta(days=1)
     while candidate.weekday() >= 5:
         candidate += timedelta(days=1)
-    return {"is_open": False, "delta": candidate - now_local,
-            "local_time": now_local}
+    return {"is_open": False, "delta": candidate - now_local, "local_time": now_local}
 
 
 def format_delta(delta):
@@ -578,11 +495,7 @@ def get_fx_to_usd_rate(currency):
     if curr_norm.upper() == "USD":
         return 1.0
     try:
-        resp = requests.get(
-            "https://api.frankfurter.app/latest",
-            params={"from": curr_norm.upper(), "to": "USD"},
-            timeout=8,
-        )
+        resp = requests.get("https://api.frankfurter.app/latest", params={"from": curr_norm.upper(), "to": "USD"}, timeout=8)
         if resp.status_code == 200:
             rate = resp.json().get("rates", {}).get("USD")
             if rate:
@@ -604,7 +517,7 @@ def get_fx_to_usd_rate(currency):
 def _lookup_isin_by_ticker_cached(ticker_clean):
     isin = yf.Ticker(ticker_clean).isin
     if not isin or isin.upper() in ("NA", "-", "NONE", ""):
-        raise _LookupMiss("no isin for " + ticker_clean)
+        raise _LookupMiss("no isin")
     return isin.upper()
 
 
@@ -623,17 +536,13 @@ def _lookup_ticker_by_isin_cached(isin_clean):
     search = yf.Search(isin_clean, max_results=10, news_count=0)
     quotes = search.quotes or []
     if not quotes:
-        raise _LookupMiss("no quotes for " + isin_clean)
+        raise _LookupMiss("no quotes")
     preferred = [q for q in quotes if q.get("quoteType") in ("EQUITY", "ETF")]
     best = (preferred or quotes)[0]
     symbol = best.get("symbol")
     if not symbol:
-        raise _LookupMiss("no symbol for " + isin_clean)
-    return {
-        "symbol": symbol,
-        "name": best.get("shortname") or best.get("longname") or symbol,
-        "exchange": best.get("exchDisp") or "",
-    }
+        raise _LookupMiss("no symbol")
+    return {"symbol": symbol, "name": best.get("shortname") or best.get("longname") or symbol, "exchange": best.get("exchDisp") or ""}
 
 
 def lookup_ticker_by_isin(isin):
@@ -696,40 +605,33 @@ def _normalize_yield_pct(raw):
 
 
 def _parse_stock_info(ticker, info, dividends):
-    price = (info.get("currentPrice")
-             or info.get("regularMarketPrice")
-             or info.get("previousClose"))
+    price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
     if price is None:
         return None
     name = info.get("shortName") or info.get("longName") or ticker
     currency = info.get("currency") or ""
     exchange_code = info.get("exchange") or ""
-    exchange_name, country = lookup_exchange(
-        exchange_code, info.get("fullExchangeName"))
+    exchange_name, country = lookup_exchange(exchange_code, info.get("fullExchangeName"))
     frequency = estimate_dividend_frequency(dividends)
-    last_div_amount = float(dividends.iloc[-1]) \
-        if (dividends is not None and len(dividends) > 0) else None
+    last_div_amount = float(dividends.iloc[-1]) if (dividends is not None and len(dividends) > 0) else None
     ex_div_date = None
     ex_div_ts = info.get("exDividendDate")
     if ex_div_ts:
         try:
-            ex_div_date = datetime.fromtimestamp(
-                ex_div_ts, tz=timezone.utc).date()
+            ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).date()
         except Exception:
             pass
     pay_div_date = None
     pay_div_ts = info.get("dividendDate")
     if pay_div_ts:
         try:
-            pay_div_date = datetime.fromtimestamp(
-                pay_div_ts, tz=timezone.utc).date()
+            pay_div_date = datetime.fromtimestamp(pay_div_ts, tz=timezone.utc).date()
         except Exception:
             pass
     annual_rate = info.get("dividendRate")
     if annual_rate is None and last_div_amount is not None:
         annual_rate = last_div_amount * 4
-    if (currency == "GBp" and annual_rate is not None
-            and last_div_amount and annual_rate < last_div_amount):
+    if currency == "GBp" and annual_rate is not None and last_div_amount and annual_rate < last_div_amount:
         annual_rate *= 100
     dividend_yield_pct = None
     if annual_rate is not None and price:
@@ -737,8 +639,7 @@ def _parse_stock_info(ticker, info, dividends):
     if dividend_yield_pct is None:
         dividend_yield_pct = _normalize_yield_pct(info.get("dividendYield"))
     if dividend_yield_pct is None:
-        dividend_yield_pct = _normalize_yield_pct(
-            info.get("trailingAnnualDividendYield"))
+        dividend_yield_pct = _normalize_yield_pct(info.get("trailingAnnualDividendYield"))
     return {
         "ticker": ticker, "name": name, "currency": currency,
         "price": float(price), "exchange": exchange_name,
@@ -756,9 +657,7 @@ def _parse_stock_info(ticker, info, dividends):
 def _fetch_growth_data_cached_v4(ticker):
     t = yf.Ticker(ticker)
     try:
-        hist = t.history(
-            period="6y", interval="1d",
-            auto_adjust=False)["Close"].dropna()
+        hist = t.history(period="6y", interval="1d", auto_adjust=False)["Close"].dropna()
     except Exception:
         hist = None
     return {
@@ -835,15 +734,12 @@ def make_usd_bar_chart(series, x_title, height=320, bar_color="#2f6fed"):
         .mark_bar(color=bar_color)
         .encode(
             x=alt.X(x_title + ":O", title=x_title, sort=None,
-                    axis=alt.Axis(labelFontSize=14, titleFontSize=16,
-                                  labelAngle=-60)),
+                    axis=alt.Axis(labelFontSize=14, titleFontSize=16, labelAngle=-60)),
             y=alt.Y("Suma (USD):Q", title="Suma (USD)",
-                    axis=alt.Axis(labelFontSize=14, titleFontSize=16,
-                                  format="$,.2f")),
+                    axis=alt.Axis(labelFontSize=14, titleFontSize=16, format="$,.2f")),
             tooltip=[
                 alt.Tooltip(x_title + ":O", title=x_title),
-                alt.Tooltip("Suma (USD):Q", title="Suma (USD)",
-                            format="$,.2f"),
+                alt.Tooltip("Suma (USD):Q", title="Suma (USD)", format="$,.2f"),
             ],
         )
         .properties(height=height)
@@ -853,47 +749,30 @@ def make_usd_bar_chart(series, x_title, height=320, bar_color="#2f6fed"):
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
-st.markdown(
-    "<style>.block-container{padding-top:1.2rem;}"
-    " h3{margin-bottom:0.4rem;}</style>",
-    unsafe_allow_html=True,
-)
+st.markdown("<style>.block-container{padding-top:1.2rem;} h3{margin-bottom:0.4rem;}</style>", unsafe_allow_html=True)
 st.markdown("### Dividend tracker")
 
 now_utc = datetime.now(ZoneInfo("UTC"))
 
 st.markdown(
     "<style>"
-    ".board-wrap{background:#fff;border-radius:10px;padding:0;"
-    "border:1px solid #e3e6ea;overflow:hidden;}"
-    ".board{width:100%;border-collapse:collapse;border-spacing:0;"
-    "font-family:'Courier New',Consolas,monospace;}"
-    ".board th{text-align:left;padding:8px 16px;font-size:11.5px;"
-    "letter-spacing:.1em;color:#8a93a1;text-transform:uppercase;"
-    "border-bottom:1px solid #e3e6ea;background:#fafbfc;}"
-    ".board td{padding:6px 16px;font-size:15px;letter-spacing:.02em;"
-    "white-space:nowrap;line-height:1.1;border-bottom:1px solid #f0f1f3;}"
+    ".board-wrap{background:#fff;border-radius:10px;padding:0;border:1px solid #e3e6ea;overflow:hidden;}"
+    ".board{width:100%;border-collapse:collapse;border-spacing:0;font-family:'Courier New',Consolas,monospace;}"
+    ".board th{text-align:left;padding:8px 16px;font-size:11.5px;letter-spacing:.1em;color:#8a93a1;text-transform:uppercase;border-bottom:1px solid #e3e6ea;background:#fafbfc;}"
+    ".board td{padding:6px 16px;font-size:15px;letter-spacing:.02em;white-space:nowrap;line-height:1.1;border-bottom:1px solid #f0f1f3;}"
     ".board tr:last-child td{border-bottom:none;}"
     ".board tbody tr:hover td{background:#f2f5fa;}"
     ".row-open td{color:#15a24a;}.row-closed td{color:#e0362b;}"
     ".code-cell{font-weight:700;}"
-    ".freq-badge{display:inline-block;padding:2px 10px;"
-    "border-radius:999px;font-size:13px;font-weight:600;}"
+    ".freq-badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:13px;font-weight:600;}"
     ".freq-quarterly{background:#e7f0fe;color:#2f5fd6;}"
     ".freq-monthly{background:#e3f7ea;color:#1c9350;}"
     ".freq-yearly{background:#f2e9fb;color:#7c3fc9;}"
     ".freq-semiannual{background:#fceceb;color:#c2453c;}"
     ".growth-pos{color:#15a24a;font-weight:600;}"
     ".growth-neg{color:#e0362b;font-weight:600;}"
-    ".section-note{font-size:15px;line-height:1.55;color:#5b6472;"
-    "margin-bottom:12px;}"
-    ".chart-label{font-size:17px;font-weight:700;color:#1a1f28;"
-    "margin:4px 0 8px 0;}"
-    "#vg-tooltip-element{font-size:16px !important;"
-    "line-height:1.5 !important;}"
-    "#vg-tooltip-element table td{font-size:16px !important;"
-    "padding:3px 8px !important;}"
-    "#vg-tooltip-element table th{font-size:16px !important;}"
+    ".section-note{font-size:15px;line-height:1.55;color:#5b6472;margin-bottom:12px;}"
+    ".chart-label{font-size:17px;font-weight:700;color:#1a1f28;margin:4px 0 8px 0;}"
     "</style>",
     unsafe_allow_html=True,
 )
@@ -916,13 +795,10 @@ for _tkr in list(st.session_state.holdings):
         stock_records[_tkr] = _rec
         st.session_state.holdings_exchange[_tkr] = _rec["exchange"]
 
-# ============================================================
-# SEKCIA 1 – PREHLAD BURZ
-# ============================================================
+# ── SEKCIA 1: Burzy ───────────────────────────────────────────────────────────
 
 existing_cities = {ex["city"] for ex in EXCHANGES}
-owned_codes = {rec.get("exchange_code") for rec in stock_records.values()
-               if rec.get("exchange_code")}
+owned_codes = {rec.get("exchange_code") for rec in stock_records.values() if rec.get("exchange_code")}
 extras = []
 for _code in owned_codes:
     _ex_info = EXTRA_MARKETS_BY_CODE.get(_code)
@@ -955,43 +831,32 @@ for ex, status in results:
 
 st.markdown(
     "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
-    "<th>Burza</th><th>Mesto</th><th>Stat</th>"
-    "<th>Miestny cas</th><th>Stav</th>"
+    "<th>Burza</th><th>Mesto</th><th>Stat</th><th>Miestny cas</th><th>Stav</th>"
     "</tr></thead><tbody>" + "".join(row_parts) + "</tbody></table></div>",
     unsafe_allow_html=True,
 )
 
-# ============================================================
-# SEKCIA 2 – DIAGNOSTIKA + PRIDAT / ODOBRAT AKCIU
-# ============================================================
+# ── SEKCIA 2: Diagnostika ─────────────────────────────────────────────────────
 
-_gs_status = st.session_state.get(
-    "gsheet_status",
-    {"ok": False, "detail": "Pripojenie sa este nevykonalo..."},
-)
+_gs_status = st.session_state.get("gsheet_status", {"ok": False, "detail": "Pripojenie sa este nevykonalo."})
 _gs_lw = st.session_state.get("gsheet_last_write", {"ok": None, "detail": ""})
 _gs_debug = st.session_state.get("_gsheet_debug", {})
-_NL = chr(10)  # bezpecny newline – NEMEŇ na 
- v stringu!
+_n_holdings = len(st.session_state.get("holdings", {}))
+_NL = chr(10)
 
-# Zostavenie stavoveho riadku – BEZ 
- v string literaloch
 if _gs_status["ok"]:
     _sline = "Ukladanie: **Google Sheets** (" + str(_gs_status.get("detail", "")) + ")"
 else:
-    _sline = ("Ukladanie: **lokalny subor** - GSheets nie je aktivny ("
-              + str(_gs_status.get("detail", "")) + ")")
+    _sline = "Ukladanie: **lokalny subor** - GSheets nie je aktivny (" + str(_gs_status.get("detail", "")) + ")"
 
 if _gs_lw.get("ok") is False:
-    _sline = _sline + _NL + _NL + "Posledny zapis: " + str(_gs_lw.get("detail", ""))
+    _sline = _sline + _NL + _NL + "Posledny zapis ZLYHAL: " + str(_gs_lw.get("detail", ""))
 elif _gs_lw.get("ok") is True:
     _sline = _sline + _NL + _NL + str(_gs_lw.get("detail", ""))
 
-_n_holdings = len(st.session_state.get("holdings", {}))
 _diag_expanded = (not _gs_status["ok"]) or (_n_holdings == 0)
 
-with st.expander("Diagnostika pripojenia a nacitania dat",
-                 expanded=_diag_expanded):
+with st.expander("Diagnostika pripojenia a nacitania dat", expanded=_diag_expanded):
     st.markdown(_sline)
 
     if _gs_debug:
@@ -1002,119 +867,88 @@ with st.expander("Diagnostika pripojenia a nacitania dat",
         non_empty = _gs_debug.get("non_empty_tickers", 0)
         rec_count = _gs_debug.get("records_count", 0)
 
-        _parts = []
+        _info_parts = []
         if _gs_debug.get("ws_title"):
-            _parts.append("List: **" + str(_gs_debug["ws_title"]) + "**")
+            _info_parts.append("List: **" + str(_gs_debug["ws_title"]) + "**")
         if rec_count is not None:
-            _parts.append("Riadkov v liste: **" + str(rec_count) + "**")
+            _info_parts.append("Riadkov: **" + str(rec_count) + "**")
         if _gs_debug.get("loaded_at"):
-            _parts.append("Cas: " + str(_gs_debug["loaded_at"]))
-        if _parts:
-            st.caption("  |  ".join(_parts))
+            _info_parts.append("Cas: " + str(_gs_debug["loaded_at"]))
+        if _info_parts:
+            st.caption("  |  ".join(_info_parts))
 
         if col_names:
-            cols_display = " | ".join(
-                "`" + str(c) + "`" for c in col_names[:12]
-            )
-            if len(col_names) > 12:
-                cols_display += " ... (+" + str(len(col_names) - 12) + ")"
-            st.caption("Stlpce v liste: " + cols_display)
+            cols_str = " | ".join("`" + str(c) + "`" for c in col_names[:10])
+            st.caption("Stlpce v liste: " + cols_str)
 
         if ticker_col:
-            det_msg = (
-                "OK - Ticker: `" + str(ticker_col) + "`"
-                + "  |  Qty: `" + str(qty_col or "-") + "`"
-                + "  |  Exchange: `" + str(exchange_col or "-") + "`"
-                + "  |  Najdenych tickerov: **" + str(non_empty) + "**"
-                + "  |  Nacitanych do appky: **" + str(_n_holdings) + "**"
-            )
-            st.success(det_msg)
+            _ok_msg = ("Ticker: `" + str(ticker_col) + "`"
+                       + "  |  Qty: `" + str(qty_col or "-") + "`"
+                       + "  |  Najdenych: **" + str(non_empty) + "**"
+                       + "  |  V appke: **" + str(_n_holdings) + "**")
+            st.success(_ok_msg)
         elif rec_count > 0:
-            st.error(
-                "Stlpec Ticker sa nenasiel v liste! "
-                "Skutocne stlpce: " + str(col_names) + " -- "
-                "Skontroluj, ci prvy riadok obsahuje "
-                "hlavicky Ticker, Qty, Exchange."
-            )
-        elif rec_count == 0 and _gs_status["ok"]:
-            st.warning("List je prazdny (0 riadkov s datami).")
+            _err_msg = "Stlpec Ticker sa nenasiel. Stlpce su: " + str(col_names)
+            st.error(_err_msg)
+        elif _gs_status["ok"]:
+            st.warning("List je prazdny - nenasli sa ziadne riadky s datami.")
 
         if non_empty > 0 and _n_holdings == 0:
-            st.warning(
-                "V liste je " + str(non_empty) + " tickerov, "
-                "ale v appke sa zobrazuje 0. "
-                "Stlac tlacidlo 'Nacitat akcie z GSheets' nizsie."
-            )
+            _warn_msg = "V liste je " + str(non_empty) + " tickerov ale v appke 0. Pouzi tlacidlo Nacitat nizsie."
+            st.warning(_warn_msg)
 
         if "error" in _gs_debug:
-            st.error("Chyba citania: `" + str(_gs_debug["error"]) + "`")
+            st.error("Chyba: " + str(_gs_debug["error"]))
 
-        sample = _gs_debug.get("sample", [])
-        if sample:
+        _sample = _gs_debug.get("sample", [])
+        if _sample:
             with st.expander("Raw data z GSheets (prve 3 zaznamy)"):
-                for i, record in enumerate(sample[:3]):
-                    st.code(
-                        "Zaznam " + str(i + 1) + ":" + _NL
-                        + json.dumps(record, ensure_ascii=False,
-                                     indent=2, default=str),
-                        language="json",
-                    )
+                for _i, _rec_item in enumerate(_sample[:3]):
+                    _json_str = json.dumps(_rec_item, ensure_ascii=False, indent=2, default=str)
+                    st.code("Zaznam " + str(_i + 1) + ":" + _NL + _json_str, language="json")
 
     st.divider()
-    _bcol1, _bcol2 = st.columns(2)
-
-    with _bcol1:
-        if st.button("Znova pripojit GSheets", use_container_width=True,
-                     help="Vymaze cache spojenia a pokusi sa znova pripojit"):
+    _bc1, _bc2 = st.columns(2)
+    with _bc1:
+        if st.button("Znova pripojit GSheets", use_container_width=True):
             _connect_gsheet.clear()
-            _ws_new, _status_new = _connect_gsheet()
-            st.session_state["gsheet_status"] = _status_new
-            if _status_new["ok"]:
-                _reloaded = load_holdings()
-                _apply_holdings_to_session(_reloaded)
-                _n = len(st.session_state.holdings)
-                if _n > 0:
-                    st.success("Nacitanych " + str(_n) + " akcii z GSheets.")
+            _ws_new, _st_new = _connect_gsheet()
+            st.session_state["gsheet_status"] = _st_new
+            if _st_new["ok"]:
+                _rel = load_holdings()
+                _apply_holdings_to_session(_rel)
+                _n2 = len(st.session_state.holdings)
+                if _n2 > 0:
+                    st.success("Nacitanych " + str(_n2) + " akcii.")
                 else:
-                    st.warning("Pripojenie OK, ale 0 akcii - pozri debug info.")
+                    st.warning("Pripojenie OK ale 0 akcii - pozri debug info vyssie.")
             else:
-                st.error("Chyba: " + str(_status_new.get("detail", "")))
+                st.error("Chyba: " + str(_st_new.get("detail", "")))
             st.rerun()
-
-    with _bcol2:
-        if st.button("Nacitat akcie z GSheets", use_container_width=True,
-                     help="Znovu nacita data bez resetu spojenia"):
-            _reloaded = load_holdings()
-            _apply_holdings_to_session(_reloaded)
-            _n = len(st.session_state.holdings)
-            if _n > 0:
-                st.success("Nacitanych " + str(_n) + " akcii.")
+    with _bc2:
+        if st.button("Nacitat akcie z GSheets", use_container_width=True):
+            _rel = load_holdings()
+            _apply_holdings_to_session(_rel)
+            _n2 = len(st.session_state.holdings)
+            if _n2 > 0:
+                st.success("Nacitanych " + str(_n2) + " akcii.")
             else:
-                st.info("0 akcii najdenych. Pozri debug info vyssie.")
+                st.info("0 akcii najdenych.")
             st.rerun()
 
     st.divider()
     st.caption("Stiahni aktualny stav portfolia ako JSON.")
     _bdata = json.dumps(
-        {
-            tkr: {
-                "qty": float(qty),
-                "exchange": st.session_state.holdings_exchange.get(tkr, ""),
-            }
-            for tkr, qty in st.session_state.holdings.items()
-        },
-        ensure_ascii=False,
-        indent=2,
+        {tkr: {"qty": float(qty), "exchange": st.session_state.holdings_exchange.get(tkr, "")}
+         for tkr, qty in st.session_state.holdings.items()},
+        ensure_ascii=False, indent=2,
     )
-    st.download_button(
-        "Stiahnut zalohu portfolia (JSON) - " + str(_n_holdings) + " akcii",
-        data=_bdata,
-        file_name="holdings_backup_"
-                  + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
-        mime="application/json",
-    )
+    _dl_label = "Stiahnut zalohu portfolia (JSON) - " + str(_n_holdings) + " akcii"
+    st.download_button(_dl_label, data=_bdata,
+                       file_name="holdings_backup_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
+                       mime="application/json")
 
-# ── Formular: Pridat / odobrat ────────────────────────────────────────────────
+# ── SEKCIA: Pridat / Odobrat ──────────────────────────────────────────────────
 
 st.markdown("#### Pridat / odobrat akciu")
 
@@ -1128,11 +962,7 @@ def _sync_isin_from_ticker():
             st.session_state["add_isin_field"] = isin
             st.session_state["add_sync_msg"] = None
         else:
-            st.session_state["add_sync_msg"] = (
-                "info",
-                "ISIN pre ticker sa nepodarilo dohladat. "
-                "Zadaj ho rucne - ISIN nie je nutny, staci ticker.",
-            )
+            st.session_state["add_sync_msg"] = ("info", "ISIN sa nepodarilo dohladat. Zadaj ticker rucne.")
 
 
 def _sync_ticker_from_isin():
@@ -1144,100 +974,55 @@ def _sync_ticker_from_isin():
             st.session_state["add_ticker_field"] = info["symbol"].upper()
             st.session_state["add_sync_msg"] = None
         else:
-            st.session_state["add_sync_msg"] = (
-                "warning",
-                "Ticker pre ISIN sa nepodarilo najst. "
-                "Skontroluj ISIN alebo zadaj ticker rucne.",
-            )
+            st.session_state["add_sync_msg"] = ("warning", "Ticker pre ISIN sa nenasiel. Zadaj ho rucne.")
 
 
 def _on_add_stock_click():
-    ticker_clean = (
-        st.session_state.get("add_ticker_field") or ""
-    ).strip().upper()
-    isin_clean = (
-        st.session_state.get("add_isin_field") or ""
-    ).strip().upper()
+    ticker_clean = (st.session_state.get("add_ticker_field") or "").strip().upper()
+    isin_clean = (st.session_state.get("add_isin_field") or "").strip().upper()
     qty_raw = str(st.session_state.get("add_qty_field") or "").strip()
     qty_val = parse_qty_input(qty_raw)
-
     if not ticker_clean and isin_clean:
         info = lookup_ticker_by_isin(isin_clean)
         if info:
             ticker_clean = info["symbol"].upper()
             st.session_state["add_ticker_field"] = ticker_clean
-
     if not ticker_clean:
-        st.session_state["add_stock_msg"] = (
-            "warning", "Zadaj ticker alebo ISIN akcie.")
+        st.session_state["add_stock_msg"] = ("warning", "Zadaj ticker alebo ISIN akcie.")
         return
-
     if qty_val is None or qty_val == 0:
-        if qty_raw and qty_raw not in ("0", "0,0", "0.0", "0,00", "0.00"):
-            msg = ("Neplatne mnozstvo '{}'. "
-                   "Zadaj cislo, napr. 1,5 alebo -0,5.").format(qty_raw)
+        if qty_raw and qty_raw not in ("0", "0,0", "0.0"):
+            st.session_state["add_stock_msg"] = ("warning", "Neplatne mnozstvo: " + qty_raw)
         else:
-            msg = "Zadaj mnozstvo rozne od 0."
-        st.session_state["add_stock_msg"] = ("warning", msg)
+            st.session_state["add_stock_msg"] = ("warning", "Zadaj mnozstvo rozne od 0.")
         return
-
     if qty_val > 0:
         new_data = fetch_stock_data(ticker_clean)
         if new_data is None:
-            st.session_state["add_stock_msg"] = (
-                "error",
-                "Ticker " + ticker_clean + " sa nepodarilo najst.")
+            st.session_state["add_stock_msg"] = ("error", "Ticker " + ticker_clean + " sa nepodarilo najst.")
             return
         current = float(st.session_state.holdings.get(ticker_clean, 0))
         new_total = current + qty_val
         st.session_state.holdings[ticker_clean] = new_total
-        st.session_state.holdings_exchange[ticker_clean] = (
-            new_data.get("exchange", ""))
-        save_holdings(
-            st.session_state.holdings,
-            st.session_state.holdings_exchange,
-        )
-        st.session_state["add_stock_msg"] = (
-            "success",
-            "Pridane: " + format_qty(qty_val) + " ks " + ticker_clean
-            + " (" + new_data["name"] + "). Celkovo: "
-            + format_qty(new_total) + " ks.",
-        )
+        st.session_state.holdings_exchange[ticker_clean] = new_data.get("exchange", "")
+        save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
+        _ok = "Pridane: " + format_qty(qty_val) + " ks " + ticker_clean + " (" + new_data["name"] + "). Celkovo: " + format_qty(new_total) + " ks."
+        st.session_state["add_stock_msg"] = ("success", _ok)
     else:
-        current_qty = float(
-            st.session_state.holdings.get(ticker_clean, 0))
+        current_qty = float(st.session_state.holdings.get(ticker_clean, 0))
         if current_qty <= 0:
-            st.session_state["add_stock_msg"] = (
-                "info",
-                "Akcia " + ticker_clean
-                + " nie je vlastnena, nie je co odobrat.",
-            )
+            st.session_state["add_stock_msg"] = ("info", "Akcia " + ticker_clean + " nie je vlastnena.")
             return
         remove_qty = abs(qty_val)
         new_qty = current_qty - remove_qty
         if new_qty <= 0:
             del st.session_state.holdings[ticker_clean]
             st.session_state.holdings_exchange.pop(ticker_clean, None)
-            extra = (" (pozicia vynulovana)"
-                     if remove_qty > current_qty else "")
-            st.session_state["add_stock_msg"] = (
-                "success",
-                "Odobrate vsetkych " + format_qty(current_qty)
-                + " ks " + ticker_clean + "." + extra,
-            )
+            st.session_state["add_stock_msg"] = ("success", "Odobrate vsetkych " + format_qty(current_qty) + " ks " + ticker_clean + ".")
         else:
             st.session_state.holdings[ticker_clean] = new_qty
-            st.session_state["add_stock_msg"] = (
-                "success",
-                "Odobrate " + format_qty(remove_qty) + " ks "
-                + ticker_clean + ". Novy stav: "
-                + format_qty(new_qty) + " ks.",
-            )
-        save_holdings(
-            st.session_state.holdings,
-            st.session_state.holdings_exchange,
-        )
-
+            st.session_state["add_stock_msg"] = ("success", "Odobrate " + format_qty(remove_qty) + " ks. Zostatok: " + format_qty(new_qty) + " ks.")
+        save_holdings(st.session_state.holdings, st.session_state.holdings_exchange)
     st.session_state["add_ticker_field"] = ""
     st.session_state["add_isin_field"] = ""
     st.session_state["add_qty_field"] = ""
@@ -1245,25 +1030,18 @@ def _on_add_stock_click():
 
 c1, c2, c3, c4 = st.columns([2.3, 2.3, 1.6, 1])
 with c1:
-    st.text_input("Ticker", placeholder="Ticker, napr. AAPL",
-                  label_visibility="collapsed", key="add_ticker_field",
-                  on_change=_sync_isin_from_ticker)
+    st.text_input("Ticker", placeholder="Ticker, napr. AAPL", label_visibility="collapsed",
+                  key="add_ticker_field", on_change=_sync_isin_from_ticker)
 with c2:
-    st.text_input("ISIN", placeholder="ISIN, napr. US0378331005",
-                  label_visibility="collapsed", key="add_isin_field",
-                  on_change=_sync_ticker_from_isin)
+    st.text_input("ISIN", placeholder="ISIN, napr. US0378331005", label_visibility="collapsed",
+                  key="add_isin_field", on_change=_sync_ticker_from_isin)
 with c3:
-    st.text_input("Mnozstvo", placeholder="Mnozstvo, napr. 1,5",
-                  label_visibility="collapsed", key="add_qty_field")
+    st.text_input("Mnozstvo", placeholder="Mnozstvo, napr. 1,5", label_visibility="collapsed",
+                  key="add_qty_field")
 with c4:
-    st.button("Pridat", use_container_width=True,
-              on_click=_on_add_stock_click)
+    st.button("Pridat", use_container_width=True, on_click=_on_add_stock_click)
 
-st.caption(
-    "Staci vyplnit ticker ALEBO ISIN. "
-    "Kladne = nakup, zaporne = predaj. "
-    "Desatinna ciarka aj bodka su prijate (1,5 = 1.5)."
-)
+st.caption("Staci vyplnit ticker ALEBO ISIN. Kladne = nakup, zaporne = predaj. 1,5 = 1.5")
 
 _m = st.session_state.pop("add_sync_msg", None)
 if _m:
@@ -1272,28 +1050,21 @@ _m = st.session_state.pop("add_stock_msg", None)
 if _m:
     getattr(st, _m[0])(_m[1])
 
-# ============================================================
-# SEKCIA 3 – MOJE AKCIE
-# ============================================================
+# ── SEKCIA 3: Moje akcie ──────────────────────────────────────────────────────
 
 st.markdown("#### Moje akcie")
 
 if not st.session_state.holdings:
-    st.info(
-        "Zatial nemas pridane ziadne akcie. Pridaj prvu vyssie, "
-        "alebo pouzij tlacidlo 'Nacitat akcie z GSheets' v diagnostike."
-    )
+    st.info("Zatial nemas pridane ziadne akcie. Pouzi tlacidlo 'Nacitat akcie z GSheets' v diagnostike vyssie.")
 else:
     rows_h = []
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
         if rec is None:
             rows_h.append({
-                "Ticker": tkr,
-                "Meno firmy": tkr,
+                "Ticker": tkr, "Meno firmy": tkr,
                 "Burza": st.session_state.holdings_exchange.get(tkr) or "N/A",
-                "Stat": "N/A",
-                "Aktualna cena": "N/A",
+                "Stat": "N/A", "Aktualna cena": "N/A",
                 "Rast 1M [%]": "N/A", "Rast 3M [%]": "N/A",
                 "Rast 6M [%]": "N/A", "Rast 1R [%]": "N/A",
                 "Rast 5R [%]": "N/A", "Div.Rocne[%]": "N/A",
@@ -1305,10 +1076,8 @@ else:
             if rec.get("annual_rate") and rec.get("price"):
                 pa = rec["annual_rate"] / rec["price"] * 100
             rows_h.append({
-                "Ticker": tkr,
-                "Meno firmy": rec["name"],
-                "Burza": rec["exchange"],
-                "Stat": rec["country"],
+                "Ticker": tkr, "Meno firmy": rec["name"],
+                "Burza": rec["exchange"], "Stat": rec["country"],
                 "Aktualna cena": fmt_curr(rec["price"], rec["currency"], 2),
                 "Rast 1M [%]": format_growth(growth.get("1m")),
                 "Rast 3M [%]": format_growth(growth.get("3m")),
@@ -1320,15 +1089,13 @@ else:
             })
 
     df_h = pd.DataFrame(rows_h)
-    _gcols = ["Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]",
-               "Rast 1R [%]", "Rast 5R [%]"]
+    _gcols = ["Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]", "Rast 1R [%]", "Rast 5R [%]"]
 
     def _style_g(val):
         if not val or val == "N/A":
             return ""
         try:
-            fv = float(
-                str(val).replace(" ", "").replace("%", "").replace(",", "."))
+            fv = float(str(val).replace(" ", "").replace("%", "").replace(",", "."))
             if fv > 0:
                 return "color:#15a24a;font-weight:600;"
             if fv < 0:
@@ -1345,30 +1112,23 @@ else:
     st.data_editor(
         styled_h,
         column_config={
-            "Ticker":        st.column_config.TextColumn(disabled=True),
-            "Meno firmy":    st.column_config.TextColumn(disabled=True),
-            "Burza":         st.column_config.TextColumn(disabled=True),
-            "Stat":          st.column_config.TextColumn(disabled=True),
+            "Ticker": st.column_config.TextColumn(disabled=True),
+            "Meno firmy": st.column_config.TextColumn(disabled=True),
+            "Burza": st.column_config.TextColumn(disabled=True),
+            "Stat": st.column_config.TextColumn(disabled=True),
             "Aktualna cena": st.column_config.TextColumn(disabled=True),
-            "Rast 1M [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 3M [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 6M [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 1R [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 5R [%]":   st.column_config.TextColumn(disabled=True),
-            "Div.Rocne[%]":  st.column_config.TextColumn(disabled=True),
-            "Mnozstvo":      st.column_config.TextColumn(
-                disabled=True,
-                help="Mnozstvo zmen cez formular 'Pridat / odobrat akciu'."),
+            "Rast 1M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 3M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 6M [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 1R [%]": st.column_config.TextColumn(disabled=True),
+            "Rast 5R [%]": st.column_config.TextColumn(disabled=True),
+            "Div.Rocne[%]": st.column_config.TextColumn(disabled=True),
+            "Mnozstvo": st.column_config.TextColumn(disabled=True),
         },
-        hide_index=True,
-        use_container_width=True,
-        height=740,
-        key="holdings_editor",
+        hide_index=True, use_container_width=True, height=740, key="holdings_editor",
     )
 
-# ============================================================
-# SEKCIA 4 – NAJBLIZZSIE EX-DIV DATUMY
-# ============================================================
+# ── SEKCIA 4: Ex-Div datumy ───────────────────────────────────────────────────
 
 st.markdown("#### Najblizzsie Ex-Div datumy")
 
@@ -1387,15 +1147,13 @@ else:
         last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
         currency = rec["currency"]
-        pct_last = (last_div / price * 100
-                    if last_div is not None and price else None)
+        pct_last = (last_div / price * 100 if last_div is not None and price else None)
         pct_annual = rec.get("dividend_yield_pct")
         if pct_annual is None and annual_rate is not None and price:
             pct_annual = annual_rate / price * 100
         div_rows.append({
             "ticker": tkr, "name": rec["name"],
-            "ex_date": rec["ex_div_date"],
-            "frequency": rec["frequency"],
+            "ex_date": rec["ex_div_date"], "frequency": rec["frequency"],
             "last_div": last_div, "annual_rate": annual_rate,
             "pct_last": pct_last, "pct_annual": pct_annual,
             "expected": last_div, "currency": currency,
@@ -1406,45 +1164,32 @@ else:
         st.info("Ziadna akcia nema aktualne oznameny buduci Ex-Div datum.")
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
-        div_rows = div_rows[:40]
         div_row_parts = []
-        for r in div_rows:
+        for r in div_rows[:40]:
             last_div_str = fmt_curr(r["last_div"], r["currency"], 4)
             if r["last_div"] is not None and r["currency"].upper() != "USD":
                 rl = get_fx_to_usd_rate(r["currency"])
                 if rl:
-                    last_div_str += (" (~ USD "
-                                     + fmt_num(r["last_div"] * rl, 4) + ")")
-            pct_last_str = fmt_pct(r["pct_last"])
-            pct_annual_str = fmt_pct(r["pct_annual"])
+                    last_div_str += " (~ USD " + fmt_num(r["last_div"] * rl, 4) + ")"
+            annual_div_str = "N/A"
             if r["annual_rate"] is not None:
-                curr = r["currency"]
-                annual_div_str = fmt_curr(r["annual_rate"], curr, 4)
-                if curr.upper() != "USD":
-                    ra = get_fx_to_usd_rate(curr)
+                annual_div_str = fmt_curr(r["annual_rate"], r["currency"], 4)
+                if r["currency"].upper() != "USD":
+                    ra = get_fx_to_usd_rate(r["currency"])
                     if ra:
-                        annual_div_str += (" (~ USD "
-                                           + fmt_num(r["annual_rate"] * ra, 2)
-                                           + ")")
-            else:
-                annual_div_str = "N/A"
+                        annual_div_str += " (~ USD " + fmt_num(r["annual_rate"] * ra, 2) + ")"
+            expected_str = "N/A"
             if r["expected"] is not None:
-                curr = r["currency"]
-                expected_str = fmt_curr(r["expected"], curr, 4)
-                if curr.upper() != "USD":
-                    re2 = get_fx_to_usd_rate(curr)
+                expected_str = fmt_curr(r["expected"], r["currency"], 4)
+                if r["currency"].upper() != "USD":
+                    re2 = get_fx_to_usd_rate(r["currency"])
                     if re2:
-                        expected_str += (" (~ USD "
-                                         + fmt_num(r["expected"] * re2, 4)
-                                         + ")")
-            else:
-                expected_str = "N/A"
+                        expected_str += " (~ USD " + fmt_num(r["expected"] * re2, 4) + ")"
             g = r.get("growth") or {}
             div_row_parts.append(
                 "<tr>"
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>"
-                "<td>" + r["name"] + "</td>"
-                "<td>1 ks</td>"
+                "<td>" + r["name"] + "</td><td>1 ks</td>"
                 "<td>" + r["ex_date"].strftime("%d/%m/%y") + "</td>"
                 "<td>" + freq_badge_html(r["frequency"]) + "</td>"
                 "<td>" + growth_cell_html(g.get("1m")) + "</td>"
@@ -1454,8 +1199,8 @@ else:
                 "<td>" + growth_cell_html(g.get("5y")) + "</td>"
                 "<td>" + last_div_str + "</td>"
                 "<td>" + annual_div_str + "</td>"
-                "<td>" + pct_last_str + "</td>"
-                "<td>" + pct_annual_str + "</td>"
+                "<td>" + fmt_pct(r["pct_last"]) + "</td>"
+                "<td>" + fmt_pct(r["pct_annual"]) + "</td>"
                 "<td>" + expected_str + "</td>"
                 "</tr>"
             )
@@ -1463,20 +1208,14 @@ else:
             "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
             "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
             "<th>Ex-Div Date</th><th>Frekvencia</th>"
-            "<th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th>"
-            "<th>Rast 1R</th><th>Rast 5R</th>"
+            "<th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th><th>Rast 1R</th><th>Rast 5R</th>"
             "<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>"
-            "<th>% k cene</th><th>Div Yield</th>"
-            "<th>Ocak. vynos/akcia</th>"
-            "</tr></thead><tbody>"
-            + "".join(div_row_parts)
-            + "</tbody></table></div>",
+            "<th>% k cene</th><th>Div Yield</th><th>Ocak. vynos/akcia</th>"
+            "</tr></thead><tbody>" + "".join(div_row_parts) + "</tbody></table></div>",
             unsafe_allow_html=True,
         )
 
-# ============================================================
-# SEKCIA 5 – VYPLACANE DIVIDENDY
-# ============================================================
+# ── SEKCIA 5: Vyplacane dividendy ─────────────────────────────────────────────
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Vyplacane dividendy")
@@ -1492,42 +1231,34 @@ else:
             continue
         if rec["pay_div_date"] < today_pay:
             continue
-        price = rec["price"]
         last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
+        price = rec["price"]
         currency = rec["currency"]
         pct_annual = rec.get("dividend_yield_pct")
         if pct_annual is None and annual_rate is not None and price:
             pct_annual = annual_rate / price * 100
         total_div = (last_div * float(qty)) if last_div is not None else None
         pay_rows.append({
-            "ticker": tkr, "name": rec["name"],
-            "qty": float(qty), "pay_date": rec["pay_div_date"],
-            "frequency": rec["frequency"], "pct_annual": pct_annual,
-            "last_div": last_div, "total_div": total_div,
-            "currency": currency,
+            "ticker": tkr, "name": rec["name"], "qty": float(qty),
+            "pay_date": rec["pay_div_date"], "frequency": rec["frequency"],
+            "pct_annual": pct_annual, "last_div": last_div,
+            "total_div": total_div, "currency": currency,
         })
 
     if not pay_rows:
         st.info("Ziadna akcia nema oznameny buduci datum vyplaty dividendy.")
     else:
         pay_rows.sort(key=lambda r: r["pay_date"])
-        pay_rows = pay_rows[:30]
         pay_row_parts = []
-        for r in pay_rows:
-            pct_annual_str = fmt_pct(r["pct_annual"])
-            last_div_str = fmt_curr(r["last_div"], r["currency"], 4)
+        for r in pay_rows[:30]:
+            total_div_str = "N/A"
             if r["total_div"] is not None:
-                curr = r["currency"]
-                total_div_str = fmt_curr(r["total_div"], curr, 2)
-                if curr.upper() != "USD":
-                    r3 = get_fx_to_usd_rate(curr)
+                total_div_str = fmt_curr(r["total_div"], r["currency"], 2)
+                if r["currency"].upper() != "USD":
+                    r3 = get_fx_to_usd_rate(r["currency"])
                     if r3:
-                        total_div_str += (" (~ USD "
-                                          + fmt_num(r["total_div"] * r3, 2)
-                                          + ")")
-            else:
-                total_div_str = "N/A"
+                        total_div_str += " (~ USD " + fmt_num(r["total_div"] * r3, 2) + ")"
             pay_row_parts.append(
                 "<tr>"
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>"
@@ -1535,8 +1266,8 @@ else:
                 "<td>" + format_qty(r["qty"]) + " ks</td>"
                 "<td>" + r["pay_date"].strftime("%d/%m/%y") + "</td>"
                 "<td>" + freq_badge_html(r["frequency"]) + "</td>"
-                "<td>" + pct_annual_str + "</td>"
-                "<td>" + last_div_str + "</td>"
+                "<td>" + fmt_pct(r["pct_annual"]) + "</td>"
+                "<td>" + fmt_curr(r["last_div"], r["currency"], 4) + "</td>"
                 "<td>" + total_div_str + "</td>"
                 "</tr>"
             )
@@ -1544,28 +1275,18 @@ else:
             "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
             "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
             "<th>Div Date</th><th>Frekvencia</th>"
-            "<th>Rocny Div Yield</th>"
-            "<th>Dividenda/akcia</th><th>Dividenda/spolu</th>"
-            "</tr></thead><tbody>"
-            + "".join(pay_row_parts)
-            + "</tbody></table></div>",
+            "<th>Rocny Div Yield</th><th>Dividenda/akcia</th><th>Dividenda/spolu</th>"
+            "</tr></thead><tbody>" + "".join(pay_row_parts) + "</tbody></table></div>",
             unsafe_allow_html=True,
         )
 
-# ============================================================
-# SEKCIA 6 – HISTORIA VYPLATENYCH DIVIDEND
-# ============================================================
+# ── SEKCIA 6: Historia dividend ───────────────────────────────────────────────
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Historia vyplatenych dividend")
 st.markdown(
-    "<div class=\"section-note\">Odhad na zaklade AKTUALNE drzaneho "
-    "mnozstva akcii a oficialnych historickych ex-div datumov a vysok "
-    "dividend. Appka nesleduje historicke zmeny velkosti pozicie, takze "
-    "ide o priblizny prepocet (akoby si dane mnozstvo akcii drzal/a "
-    "pocas celeho obdobia), nie o realnu historiu tvojich vlastnych "
-    "vyplat. Prepocet na USD pouziva aktualny FX kurz, nie "
-    "historicky.</div>",
+    "<div class=\"section-note\">Odhad na zaklade AKTUALNE drzaneho mnozstva akcii."
+    " Prepocet na USD pouziva aktualny FX kurz.</div>",
     unsafe_allow_html=True,
 )
 
@@ -1574,7 +1295,6 @@ if not st.session_state.holdings:
 else:
     today_h = datetime.now(timezone.utc).date()
     start_h = (pd.Timestamp(today_h) - pd.DateOffset(years=5)).date()
-
     hist_rows = []
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
@@ -1601,74 +1321,39 @@ else:
             })
 
     if not hist_rows:
-        st.info("Za poslednych 5 rokov sa nenasli ziadne vyplatene dividendy.")
+        st.info("Za poslednych 5 rokov sa nenasli ziadne dividendy.")
     else:
         df_hist = pd.DataFrame(hist_rows)
-        df_hist["month"] = df_hist["date"].apply(
-            lambda d: d.strftime("%Y-%m"))
+        df_hist["month"] = df_hist["date"].apply(lambda d: d.strftime("%Y-%m"))
         df_hist["year"] = df_hist["date"].apply(lambda d: d.year)
-
-        monthly_hist = (df_hist.groupby("month")["amount_usd"]
-                        .sum().sort_index())
+        monthly_hist = df_hist.groupby("month")["amount_usd"].sum().sort_index()
         total_hist = df_hist["amount_usd"].sum()
         n_years_covered = max(df_hist["year"].nunique(), 1)
-
         current_year = today_h.year
-        ytd_hist = df_hist[
-            df_hist["year"] == current_year]["amount_usd"].sum()
+        ytd_hist = df_hist[df_hist["year"] == current_year]["amount_usd"].sum()
         months_elapsed = today_h.month
         avg_month_ytd = ytd_hist / months_elapsed if months_elapsed else 0.0
-
         colH1, colH2 = st.columns([1, 3])
         with colH1:
-            st.metric("Spolu za 5 rokov (odhad)",
-                      fmt_curr(total_hist, "USD", 2))
-            st.metric("Priemerne rocne",
-                      fmt_curr(total_hist / n_years_covered, "USD", 2))
-            st.metric(
-                "Priemerne mesacne (rok " + str(current_year) + ")",
-                fmt_curr(avg_month_ytd, "USD", 2),
-                help=(
-                    "Sucet dividend od zaciatku roku "
-                    + str(current_year)
-                    + " do dnes, delene poctom doterajsich mesiacov ("
-                    + str(months_elapsed) + ")."
-                ),
-            )
+            st.metric("Spolu za 5 rokov (odhad)", fmt_curr(total_hist, "USD", 2))
+            st.metric("Priemerne rocne", fmt_curr(total_hist / n_years_covered, "USD", 2))
+            st.metric("Priemerne mesacne (" + str(current_year) + ")", fmt_curr(avg_month_ytd, "USD", 2))
         with colH2:
-            st.markdown(
-                "<div class=\"chart-label\">"
-                "Mesacny prijem z dividend (USD)</div>",
-                unsafe_allow_html=True,
-            )
-            st.altair_chart(
-                make_usd_bar_chart(monthly_hist, "month"),
-                use_container_width=True,
-            )
-
+            st.markdown("<div class=\"chart-label\">Mesacny prijem z dividend (USD)</div>", unsafe_allow_html=True)
+            st.altair_chart(make_usd_bar_chart(monthly_hist, "month"), use_container_width=True)
         with st.expander("Detailny prehlad podla akcie a mesiaca"):
             pivot_hist = df_hist.pivot_table(
-                index="month", columns="ticker",
-                values="amount_usd", aggfunc="sum", fill_value=0.0,
+                index="month", columns="ticker", values="amount_usd", aggfunc="sum", fill_value=0.0
             ).sort_index()
-            st.dataframe(
-                pivot_hist.style.format("{:.2f}"),
-                use_container_width=True,
-            )
+            st.dataframe(pivot_hist.style.format("{:.2f}"), use_container_width=True)
 
-# ============================================================
-# SEKCIA 7 – OCAKAVANE BUDUCE DIVIDENDOVE PRIJMY
-# ============================================================
+# ── SEKCIA 7: Buducnost ───────────────────────────────────────────────────────
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Ocakavane buduce dividendove prijmy")
 st.markdown(
-    "<div class=\"section-note\">Prvy termin pri kazdej akcii je "
-    "oficialne oznameny buduci ex-div datum (ak je dostupny) - teda uz "
-    "potvrdena udalost. Dalsie terminy su len ODHAD, dopocitany na "
-    "zaklade zistenej frekvencie vyplacania a poslednej znamej vysky "
-    "dividendy na akciu. Skutocna vyska aj datum buducich vyplat sa "
-    "mozu zmenit.</div>",
+    "<div class=\"section-note\">Prvy termin je potvrdeny ex-div datum."
+    " Dalsie su odhad podla frekvencie vyplacania.</div>",
     unsafe_allow_html=True,
 )
 
@@ -1677,7 +1362,6 @@ if not st.session_state.holdings:
 else:
     today_f = datetime.now(timezone.utc).date()
     horizon_f = (pd.Timestamp(today_f) + pd.DateOffset(months=12)).date()
-
     proj_rows = []
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
@@ -1693,46 +1377,28 @@ else:
         for ev in events:
             proj_rows.append({
                 "date": ev["date"], "ticker": tkr, "name": rec["name"],
-                "qty": qty_f, "amount_per_share": last_div,
-                "currency": currency,
+                "qty": qty_f, "amount_per_share": last_div, "currency": currency,
                 "amount_local": last_div * qty_f,
                 "amount_usd": last_div * qty_f * fx,
                 "confirmed": ev["confirmed"],
             })
 
     if not proj_rows:
-        st.info(
-            "Pre drzane akcie nie su dostupne data na projekciu "
-            "buducich dividend."
-        )
+        st.info("Pre drzane akcie nie su dostupne data na projekciu.")
     else:
         df_proj = pd.DataFrame(proj_rows)
-        df_proj["month"] = df_proj["date"].apply(
-            lambda d: d.strftime("%Y-%m"))
-        monthly_proj = (df_proj.groupby("month")["amount_usd"]
-                        .sum().sort_index())
+        df_proj["month"] = df_proj["date"].apply(lambda d: d.strftime("%Y-%m"))
+        monthly_proj = df_proj.groupby("month")["amount_usd"].sum().sort_index()
         total_proj = df_proj["amount_usd"].sum()
-
         colF1, colF2 = st.columns([1, 3])
         with colF1:
-            st.metric("Ocakavane za 12 mesiacov",
-                      fmt_curr(total_proj, "USD", 2))
+            st.metric("Ocakavane za 12 mesiacov", fmt_curr(total_proj, "USD", 2))
         with colF2:
-            st.markdown(
-                "<div class=\"chart-label\">Ocakavany mesacny prijem z "
-                "dividend (USD)</div>",
-                unsafe_allow_html=True,
-            )
-            st.altair_chart(
-                make_usd_bar_chart(monthly_proj, "month"),
-                use_container_width=True,
-            )
-
+            st.markdown("<div class=\"chart-label\">Ocakavany mesacny prijem z dividend (USD)</div>", unsafe_allow_html=True)
+            st.altair_chart(make_usd_bar_chart(monthly_proj, "month"), use_container_width=True)
         df_proj_sorted = df_proj.sort_values("date")
         proj_row_parts = []
         for _, r in df_proj_sorted.iterrows():
-            amt_usd_str = fmt_curr(r["amount_usd"], "USD", 2)
-            amt_local_str = fmt_curr(r["amount_local"], r["currency"], 2)
             status_html = (
                 "<span class=\"freq-badge freq-monthly\">Potvrdene</span>"
                 if r["confirmed"] else
@@ -1745,18 +1411,15 @@ else:
                 "<td>" + r["date"].strftime("%d/%m/%y") + "</td>"
                 "<td>" + status_html + "</td>"
                 "<td>" + format_qty(r["qty"]) + " ks</td>"
-                "<td>" + amt_local_str + "</td>"
-                "<td>" + amt_usd_str + "</td>"
+                "<td>" + fmt_curr(r["amount_local"], r["currency"], 2) + "</td>"
+                "<td>" + fmt_curr(r["amount_usd"], "USD", 2) + "</td>"
                 "</tr>"
             )
-        with st.expander("Detailny prehlad ocakavanych vyplat",
-                         expanded=False):
+        with st.expander("Detailny prehlad ocakavanych vyplat", expanded=False):
             st.markdown(
                 "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
                 "<th>Ticker</th><th>Meno</th><th>Datum</th><th>Status</th>"
                 "<th>Mnozstvo</th><th>Suma/menou</th><th>Suma (USD)</th>"
-                "</tr></thead><tbody>"
-                + "".join(proj_row_parts)
-                + "</tbody></table></div>",
+                "</tr></thead><tbody>" + "".join(proj_row_parts) + "</tbody></table></div>",
                 unsafe_allow_html=True,
             )
