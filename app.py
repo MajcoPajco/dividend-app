@@ -294,6 +294,53 @@ HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
 GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
 
+def _find_or_create_holdings_ws(sh):
+    """
+    Najde list (tab) s holdings.
+
+    KLUCOVA OPRAVA: povodny kod hladal presne list nazvany "Holdings"
+    a ak ho nenasiel, TICHO vytvoril novy PRAZDNY list s tymto nazvom.
+    Ak realne data boli v liste s inym nazvom (napr. "List1", "Harok1",
+    "Sheet1"...), appka sa "uspesne pripojila" k spravnemu zositu, ale
+    citala/zapisovala do noveho prazdneho listu -> portfolio vyzeralo
+    prazdne aj ked v Google Sheets data vidno.
+
+    Postup:
+    1. Presna zhoda nazvu "Holdings".
+    2. Case-insensitive zhoda nazvu.
+    3. List, ktoreho hlavicka (1. riadok) obsahuje stlpce
+       Ticker/Qty/Exchange (case-insensitive) - pokryje aj ine
+       pomenovanie listu.
+    4. Ak nic z toho, a zosit ma iba jeden list, pouzije ten (nez aby
+       vytvoril druhy, prazdny, a "zatienil" existujuce data).
+    5. Az na koniec: vytvori novy list "Holdings" s hlavickou.
+    """
+    all_ws = sh.worksheets()
+
+    for ws in all_ws:
+        if ws.title == "Holdings":
+            return ws
+    for ws in all_ws:
+        if ws.title.strip().lower() == "holdings":
+            return ws
+
+    expected = {"ticker", "qty", "exchange"}
+    for ws in all_ws:
+        try:
+            header = {str(h).strip().lower() for h in ws.row_values(1)}
+        except Exception:
+            continue
+        if expected.issubset(header):
+            return ws
+
+    if len(all_ws) == 1:
+        return all_ws[0]
+
+    ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
+    ws.update([GSHEET_HEADER], value_input_option="RAW")
+    return ws
+
+
 @st.cache_resource(show_spinner=False)
 def _connect_gsheet():
     if gspread is None or _GoogleCredentials is None:
@@ -312,12 +359,13 @@ def _connect_gsheet():
         )
         gc = gspread.authorize(creds)
         sh = gc.open_by_url(st.secrets["gsheet_url"])
-        try:
-            ws = sh.worksheet("Holdings")
-        except gspread.WorksheetNotFound:
-            ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
-            ws.update([GSHEET_HEADER], value_input_option="RAW")
-        return ws, {"ok": True, "detail": "Pripojene k: " + sh.title}
+        ws = _find_or_create_holdings_ws(sh)
+        n_rows = max(len(ws.get_all_values()) - 1, 0)
+        return ws, {
+            "ok": True,
+            "detail": ("Pripojene k: " + sh.title + " / list: " + ws.title
+                       + " (" + str(n_rows) + " riadkov dat)"),
+        }
     except Exception as e:
         return None, {"ok": False,
                       "detail": "Chyba: " + type(e).__name__ + ": " + str(e)}
@@ -358,10 +406,14 @@ def load_holdings():
             records = _safe_read_records(ws)
             result = {}
             for r in records:
-                tkr = str(r.get("Ticker", "")).strip().upper()
+                # Case-insensitive pristup k stlpcom - ak ma hlavicka
+                # v Google Sheets ine velke/male pismena (napr. "ticker"
+                # miesto "Ticker"), nechceme ticho zahodit vsetky riadky.
+                r_norm = {str(k).strip().lower(): v for k, v in r.items()}
+                tkr = str(r_norm.get("ticker", "")).strip().upper()
                 if not tkr:
                     continue
-                raw_qty = r.get("Qty", 0)
+                raw_qty = r_norm.get("qty", 0)
                 if raw_qty == "" or raw_qty is None:
                     qty = 0.0
                 else:
@@ -371,7 +423,7 @@ def load_holdings():
                     qty = parsed if parsed is not None else 0.0
                 result[tkr] = {
                     "qty": qty,
-                    "exchange": r.get("Exchange", ""),
+                    "exchange": r_norm.get("exchange", ""),
                 }
             return result
         except Exception as e:
@@ -925,13 +977,34 @@ with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_sline)
     st.caption(
         "Pripojenie na GSheets sa skusa len raz za bezanie appky. "
-        "Ak si zmenil opravnenia, pouzij tlacidlo nizsie."
+        "Ak si zmenil opravnenia alebo dopisal data priamo v Google Sheets, "
+        "pouzi tlacidlo nizsie."
     )
-    if st.button("Skusit pripojenie na GSheets znova"):
-        _connect_gsheet.clear()
-        _, _fresh = _connect_gsheet()
-        st.session_state["gsheet_status"] = _fresh
-        st.rerun()
+    _dcol1, _dcol2 = st.columns(2)
+    with _dcol1:
+        if st.button("Skusit pripojenie na GSheets znova"):
+            _connect_gsheet.clear()
+            _, _fresh = _connect_gsheet()
+            st.session_state["gsheet_status"] = _fresh
+            if _fresh.get("ok"):
+                _reloaded = load_holdings()
+                st.session_state.holdings = {
+                    tkr: rec.get("qty", 0) for tkr, rec in _reloaded.items()
+                }
+                st.session_state.holdings_exchange = {
+                    tkr: rec.get("exchange", "") for tkr, rec in _reloaded.items()
+                }
+            st.rerun()
+    with _dcol2:
+        if st.button("Nacitat portfolio znova z GSheets"):
+            _reloaded = load_holdings()
+            st.session_state.holdings = {
+                tkr: rec.get("qty", 0) for tkr, rec in _reloaded.items()
+            }
+            st.session_state.holdings_exchange = {
+                tkr: rec.get("exchange", "") for tkr, rec in _reloaded.items()
+            }
+            st.rerun()
     st.divider()
     st.caption("Stiahni aktualny stav portfolia ako JSON.")
     _bdata = json.dumps(
