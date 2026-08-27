@@ -294,53 +294,6 @@ HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
 GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
 
-def _find_or_create_holdings_ws(sh):
-    """
-    Najde list (tab) s holdings.
-
-    KLUCOVA OPRAVA: povodny kod hladal presne list nazvany "Holdings"
-    a ak ho nenasiel, TICHO vytvoril novy PRAZDNY list s tymto nazvom.
-    Ak realne data boli v liste s inym nazvom (napr. "List1", "Harok1",
-    "Sheet1"...), appka sa "uspesne pripojila" k spravnemu zositu, ale
-    citala/zapisovala do noveho prazdneho listu -> portfolio vyzeralo
-    prazdne aj ked v Google Sheets data vidno.
-
-    Postup:
-    1. Presna zhoda nazvu "Holdings".
-    2. Case-insensitive zhoda nazvu.
-    3. List, ktoreho hlavicka (1. riadok) obsahuje stlpce
-       Ticker/Qty/Exchange (case-insensitive) - pokryje aj ine
-       pomenovanie listu.
-    4. Ak nic z toho, a zosit ma iba jeden list, pouzije ten (nez aby
-       vytvoril druhy, prazdny, a "zatienil" existujuce data).
-    5. Az na koniec: vytvori novy list "Holdings" s hlavickou.
-    """
-    all_ws = sh.worksheets()
-
-    for ws in all_ws:
-        if ws.title == "Holdings":
-            return ws
-    for ws in all_ws:
-        if ws.title.strip().lower() == "holdings":
-            return ws
-
-    expected = {"ticker", "qty", "exchange"}
-    for ws in all_ws:
-        try:
-            header = {str(h).strip().lower() for h in ws.row_values(1)}
-        except Exception:
-            continue
-        if expected.issubset(header):
-            return ws
-
-    if len(all_ws) == 1:
-        return all_ws[0]
-
-    ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
-    ws.update([GSHEET_HEADER], value_input_option="RAW")
-    return ws
-
-
 @st.cache_resource(show_spinner=False)
 def _connect_gsheet():
     if gspread is None or _GoogleCredentials is None:
@@ -359,59 +312,42 @@ def _connect_gsheet():
         )
         gc = gspread.authorize(creds)
         sh = gc.open_by_url(st.secrets["gsheet_url"])
-        ws = _find_or_create_holdings_ws(sh)
-        all_vals = ws.get_all_values()
-        n_rows = max(len(all_vals) - 1, 0)
-        header_row = all_vals[0] if all_vals else []
-        sample_row = all_vals[1] if len(all_vals) > 1 else []
-        has_header = bool(header_row) and "ticker" in [
-            str(c).strip().lower() for c in header_row
-        ]
-        return ws, {
-            "ok": True,
-            "detail": ("Pripojene k: " + sh.title + " / list: " + ws.title
-                       + " (" + str(n_rows) + " riadkov dat)"),
-            "header_row": header_row,
-            "sample_row": sample_row,
-            "has_header": has_header,
-        }
+        try:
+            ws = sh.worksheet("Holdings")
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
+            ws.update([GSHEET_HEADER], value_input_option="RAW")
+        return ws, {"ok": True, "detail": "Pripojene k: " + sh.title}
     except Exception as e:
         return None, {"ok": False,
                       "detail": "Chyba: " + type(e).__name__ + ": " + str(e)}
 
 
-def _read_holdings_rows(ws):
+def _safe_read_records(ws):
     """
-    Cita riadky z listu POZICNE (stlpec A=Ticker, B=Qty, C=Exchange),
-    nezavisle od toho, ci ma list hlavicku alebo nie.
+    Cita zaznamy z GSheets.
 
-    KLUCOVA OPRAVA: povodny kod pouzival ws.get_all_records(), ktory
-    VZDY berie 1. riadok ako hlavicku so stlpcami "Ticker"/"Qty"/
-    "Exchange". Ak realny hárok ziadnu hlavicku nema (data zacinaju
-    hned na 1. riadku, napr. "AAPL, 3,22535, NASDAQ"), get_all_records
-    si "Ticker"/"Qty"/"Exchange" nazvy stlpcov jednoducho vymysli
-    z prveho riadku dat (napr. stlpec sa vola doslova "AAPL") a
-    VSETKY riadky sa potom ticho zahodia, lebo ziadny stlpec sa
-    nevola "Ticker".
-
-    Tu citame vzdy surove hodnoty (get_all_values), zisti sa, ci prvy
-    riadok vyzera ako hlavicka (obsahuje bunku "ticker", case-insens.)
-    - ak ano, preskoci sa; ak nie, berie sa ako data. Hodnoty sa citaju
-    ako stringy, takze SK format "2,1" sa spracuje cez parse_qty_input.
+    KLUCOVA OPRAVA:
+    value_render_option='UNFORMATTED_VALUE' vrati cisla ako Python float/int
+    (napr. 2.1), NIE ako locale-formatovany string (napr. "2,1").
+    Bez tohto nastavenia gspread internalna funkcia numericise() odstrani
+    ciarku zo stringu "2,1" a vrati integer 21 – cim korupuje data.
     """
-    all_vals = ws.get_all_values()
-    if not all_vals:
-        return []
-    first_row = [str(c).strip().lower() for c in all_vals[0]]
-    has_header = "ticker" in first_row
-    data_rows = all_vals[1:] if has_header else all_vals
-    records = []
-    for row in data_rows:
-        if not any(str(c).strip() for c in row):
-            continue
-        row = list(row) + ["", "", ""]
-        records.append({"ticker": row[0], "qty": row[1], "exchange": row[2]})
-    return records
+    try:
+        # gspread >= 5.0: podporuje value_render_option priamo
+        return ws.get_all_records(value_render_option="UNFORMATTED_VALUE")
+    except TypeError:
+        pass
+    try:
+        # gspread 3.x / 4.x: numericise_ignore=['ALL'] zabraní
+        # internej konverzii – vsetko pride ako string, ktory
+        # parse_qty_input() spracuje spravne
+        return ws.get_all_records(numericise_ignore=["ALL"])
+    except TypeError:
+        pass
+    # Posledna zachrana – moze korupovat desatinne hodnoty v SK locale,
+    # ale aspon nieco vrati
+    return ws.get_all_records()
 
 
 def load_holdings():
@@ -419,17 +355,13 @@ def load_holdings():
     st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
-            records = _read_holdings_rows(ws)
+            records = _safe_read_records(ws)
             result = {}
             for r in records:
-                # Case-insensitive pristup k stlpcom - ak ma hlavicka
-                # v Google Sheets ine velke/male pismena (napr. "ticker"
-                # miesto "Ticker"), nechceme ticho zahodit vsetky riadky.
-                r_norm = {str(k).strip().lower(): v for k, v in r.items()}
-                tkr = str(r_norm.get("ticker", "")).strip().upper()
+                tkr = str(r.get("Ticker", "")).strip().upper()
                 if not tkr:
                     continue
-                raw_qty = r_norm.get("qty", 0)
+                raw_qty = r.get("Qty", 0)
                 if raw_qty == "" or raw_qty is None:
                     qty = 0.0
                 else:
@@ -439,7 +371,7 @@ def load_holdings():
                     qty = parsed if parsed is not None else 0.0
                 result[tkr] = {
                     "qty": qty,
-                    "exchange": r_norm.get("exchange", ""),
+                    "exchange": r.get("Exchange", ""),
                 }
             return result
         except Exception as e:
@@ -991,56 +923,15 @@ elif _gs_lw.get("ok") is True:
 
 with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_sline)
-    if _gs_status.get("header_row") is not None:
-        st.caption(
-            "Zistena hlavicka (1. riadok listu): "
-            + str(_gs_status.get("header_row"))
-        )
-        st.caption(
-            "Ukazka 2. riadku (prve data): "
-            + str(_gs_status.get("sample_row"))
-        )
-        st.caption(
-            "Appka ocakava stlpce presne: Ticker, Qty, Exchange "
-            "(na velkosti pismen nezalezi, ale nazov musi byt tento)."
-        )
-        if _gs_status.get("has_header"):
-            st.caption("Hlavicka rozpoznana - riadok 1 sa preskakuje.")
-        else:
-            st.caption(
-                "Hlavicka NEBOLA rozpoznana - vsetky riadky vratane "
-                "1. sa citaju ako data (stlpec A=Ticker, B=Qty, C=Exchange)."
-            )
     st.caption(
         "Pripojenie na GSheets sa skusa len raz za bezanie appky. "
-        "Ak si zmenil opravnenia alebo dopisal data priamo v Google Sheets, "
-        "pouzi tlacidlo nizsie."
+        "Ak si zmenil opravnenia, pouzij tlacidlo nizsie."
     )
-    _dcol1, _dcol2 = st.columns(2)
-    with _dcol1:
-        if st.button("Skusit pripojenie na GSheets znova"):
-            _connect_gsheet.clear()
-            _, _fresh = _connect_gsheet()
-            st.session_state["gsheet_status"] = _fresh
-            if _fresh.get("ok"):
-                _reloaded = load_holdings()
-                st.session_state.holdings = {
-                    tkr: rec.get("qty", 0) for tkr, rec in _reloaded.items()
-                }
-                st.session_state.holdings_exchange = {
-                    tkr: rec.get("exchange", "") for tkr, rec in _reloaded.items()
-                }
-            st.rerun()
-    with _dcol2:
-        if st.button("Nacitat portfolio znova z GSheets"):
-            _reloaded = load_holdings()
-            st.session_state.holdings = {
-                tkr: rec.get("qty", 0) for tkr, rec in _reloaded.items()
-            }
-            st.session_state.holdings_exchange = {
-                tkr: rec.get("exchange", "") for tkr, rec in _reloaded.items()
-            }
-            st.rerun()
+    if st.button("Skusit pripojenie na GSheets znova"):
+        _connect_gsheet.clear()
+        _, _fresh = _connect_gsheet()
+        st.session_state["gsheet_status"] = _fresh
+        st.rerun()
     st.divider()
     st.caption("Stiahni aktualny stav portfolia ako JSON.")
     _bdata = json.dumps(
