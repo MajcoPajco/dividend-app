@@ -364,43 +364,54 @@ def _connect_gsheet():
         n_rows = max(len(all_vals) - 1, 0)
         header_row = all_vals[0] if all_vals else []
         sample_row = all_vals[1] if len(all_vals) > 1 else []
+        has_header = bool(header_row) and "ticker" in [
+            str(c).strip().lower() for c in header_row
+        ]
         return ws, {
             "ok": True,
             "detail": ("Pripojene k: " + sh.title + " / list: " + ws.title
                        + " (" + str(n_rows) + " riadkov dat)"),
             "header_row": header_row,
             "sample_row": sample_row,
+            "has_header": has_header,
         }
     except Exception as e:
         return None, {"ok": False,
                       "detail": "Chyba: " + type(e).__name__ + ": " + str(e)}
 
 
-def _safe_read_records(ws):
+def _read_holdings_rows(ws):
     """
-    Cita zaznamy z GSheets.
+    Cita riadky z listu POZICNE (stlpec A=Ticker, B=Qty, C=Exchange),
+    nezavisle od toho, ci ma list hlavicku alebo nie.
 
-    KLUCOVA OPRAVA:
-    value_render_option='UNFORMATTED_VALUE' vrati cisla ako Python float/int
-    (napr. 2.1), NIE ako locale-formatovany string (napr. "2,1").
-    Bez tohto nastavenia gspread internalna funkcia numericise() odstrani
-    ciarku zo stringu "2,1" a vrati integer 21 – cim korupuje data.
+    KLUCOVA OPRAVA: povodny kod pouzival ws.get_all_records(), ktory
+    VZDY berie 1. riadok ako hlavicku so stlpcami "Ticker"/"Qty"/
+    "Exchange". Ak realny hárok ziadnu hlavicku nema (data zacinaju
+    hned na 1. riadku, napr. "AAPL, 3,22535, NASDAQ"), get_all_records
+    si "Ticker"/"Qty"/"Exchange" nazvy stlpcov jednoducho vymysli
+    z prveho riadku dat (napr. stlpec sa vola doslova "AAPL") a
+    VSETKY riadky sa potom ticho zahodia, lebo ziadny stlpec sa
+    nevola "Ticker".
+
+    Tu citame vzdy surove hodnoty (get_all_values), zisti sa, ci prvy
+    riadok vyzera ako hlavicka (obsahuje bunku "ticker", case-insens.)
+    - ak ano, preskoci sa; ak nie, berie sa ako data. Hodnoty sa citaju
+    ako stringy, takze SK format "2,1" sa spracuje cez parse_qty_input.
     """
-    try:
-        # gspread >= 5.0: podporuje value_render_option priamo
-        return ws.get_all_records(value_render_option="UNFORMATTED_VALUE")
-    except TypeError:
-        pass
-    try:
-        # gspread 3.x / 4.x: numericise_ignore=['ALL'] zabraní
-        # internej konverzii – vsetko pride ako string, ktory
-        # parse_qty_input() spracuje spravne
-        return ws.get_all_records(numericise_ignore=["ALL"])
-    except TypeError:
-        pass
-    # Posledna zachrana – moze korupovat desatinne hodnoty v SK locale,
-    # ale aspon nieco vrati
-    return ws.get_all_records()
+    all_vals = ws.get_all_values()
+    if not all_vals:
+        return []
+    first_row = [str(c).strip().lower() for c in all_vals[0]]
+    has_header = "ticker" in first_row
+    data_rows = all_vals[1:] if has_header else all_vals
+    records = []
+    for row in data_rows:
+        if not any(str(c).strip() for c in row):
+            continue
+        row = list(row) + ["", "", ""]
+        records.append({"ticker": row[0], "qty": row[1], "exchange": row[2]})
+    return records
 
 
 def load_holdings():
@@ -408,7 +419,7 @@ def load_holdings():
     st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
-            records = _safe_read_records(ws)
+            records = _read_holdings_rows(ws)
             result = {}
             for r in records:
                 # Case-insensitive pristup k stlpcom - ak ma hlavicka
@@ -993,6 +1004,13 @@ with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
             "Appka ocakava stlpce presne: Ticker, Qty, Exchange "
             "(na velkosti pismen nezalezi, ale nazov musi byt tento)."
         )
+        if _gs_status.get("has_header"):
+            st.caption("Hlavicka rozpoznana - riadok 1 sa preskakuje.")
+        else:
+            st.caption(
+                "Hlavicka NEBOLA rozpoznana - vsetky riadky vratane "
+                "1. sa citaju ako data (stlpec A=Ticker, B=Qty, C=Exchange)."
+            )
     st.caption(
         "Pripojenie na GSheets sa skusa len raz za bezanie appky. "
         "Ak si zmenil opravnenia alebo dopisal data priamo v Google Sheets, "
