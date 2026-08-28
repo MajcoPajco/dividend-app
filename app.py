@@ -1,5 +1,6 @@
 import json
 import time
+import io
 from pathlib import Path
 import streamlit as st
 import pandas as pd
@@ -787,6 +788,85 @@ def fetch_stock_data(ticker):
         return None
 
 
+# ── Zalozny zdroj (Stooq) - LEN cena a rast, ked Yahoo vobec nema data ──────
+#
+# Stooq.com je volne dostupny zdroj historickych cien bez API kluca a bez
+# zdokumentovaneho limitu poziadaviek - vhodny ako zalozny zdroj PRESNE cien
+# a vypoctu rastu (nie vsak dividend - tie Stooq neposkytuje). Pouziva sa
+# LEN vtedy, ked appka pre dany ticker NEMA VOBEC ZIADNE data (ani stare) -
+# t.j. len na vyplnenie medzery, kym sa Yahoo (zdroj dividend) znova
+# nesprístupni. Prekladame LEN burzy, pri ktorych je zhoda formatu tickera
+# medzi Yahoo a Stooq overena a bezpecna (US, Nemecko-Xetra, Hongkong).
+# Pre ostatne burzy (UK, Japonsko, Francuzsko, Svajciarsko, Kanada,
+# Australia, Cina-Shanghai, India, Norsko...) sa NEPREKLADA, aby sa
+# omylom nezobrazili data inej firmy pri nespravnom formate symbolu.
+_STOOQ_SUFFIX_MAP = {"": "us", "DE": "de", "HK": "hk"}
+_STOOQ_SUFFIX_CURRENCY = {"us": "USD", "de": "EUR", "hk": "HKD"}
+
+
+def _yahoo_ticker_to_stooq_symbol(ticker):
+    if "." in ticker:
+        base, _, suf = ticker.rpartition(".")
+        suf = suf.upper()
+    else:
+        base, suf = ticker, ""
+    stooq_suf = _STOOQ_SUFFIX_MAP.get(suf)
+    if stooq_suf is None:
+        return None
+    return base.lower() + "." + stooq_suf
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _fetch_stooq_fallback(ticker):
+    stooq_symbol = _yahoo_ticker_to_stooq_symbol(ticker)
+    if stooq_symbol is None:
+        return None
+    try:
+        resp = requests.get(
+            "https://stooq.com/q/d/l/",
+            params={"s": stooq_symbol, "i": "d"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        text = resp.text
+    except Exception:
+        return None
+
+    lines = text.strip().splitlines() if text else []
+    if len(lines) < 2 or not lines[0].startswith("Date,"):
+        return None  # Stooq vrati text bez CSV hlavicky pri neplatnom symbole
+    try:
+        df = pd.read_csv(io.StringIO(text))
+    except Exception:
+        return None
+    if df.empty or "Close" not in df.columns:
+        return None
+    df["Date"] = pd.to_datetime(df["Date"])
+    df = df.dropna(subset=["Close"]).sort_values("Date")
+    if df.empty:
+        return None
+
+    close_hist = df.set_index("Date")["Close"]
+    price = float(close_hist.iloc[-1])
+    suf = stooq_symbol.rsplit(".", 1)[-1]
+    currency = _STOOQ_SUFFIX_CURRENCY.get(suf, "")
+    time.sleep(0.1)
+    return {
+        "ticker": ticker, "name": ticker, "currency": currency,
+        "price": price, "exchange": "", "exchange_code": "", "country": "",
+        "last_div_amount": None, "ex_div_date": None, "pay_div_date": None,
+        "annual_rate": None, "dividend_yield_pct": None, "frequency": "N/A",
+        "dividends_history": None,
+        "growth": {
+            "1m": _pct_change_over_period(close_hist, months=1),
+            "3m": _pct_change_over_period(close_hist, months=3),
+            "6m": _pct_change_over_period(close_hist, months=6),
+            "1y": _pct_change_over_period(close_hist, years=1),
+            "5y": _pct_change_over_period(close_hist, years=5),
+        },
+    }
+
+
 # ── Projekcia buducich dividend ─────────────────────────────────────────────
 
 FREQ_INTERVAL_DAYS = {
@@ -988,6 +1068,7 @@ _cache = st.session_state["_stock_cache"]
 stock_records = {}
 _n_fresh_ok = 0
 _n_stale = 0
+_n_stooq_fallback = 0
 _n_missing = 0
 _rate_limited_hit = False
 
@@ -1000,7 +1081,7 @@ if _all_tickers:
     _fresh_attempts = 0
 
     with st.spinner(
-        "Nacitavam data pre " + str(_n) + " akcii z Yahoo Finance..."
+        "Nacitavam data pre " + str(_n) + " akcii..."
     ):
         for _tkr in _order:
             _entry = _cache.get(_tkr)
@@ -1012,17 +1093,37 @@ if _all_tickers:
                 _fresh_attempts += 1
                 _rec = fetch_stock_data(_tkr)
                 if _rec is not None:
-                    _cache[_tkr] = {"rec": _rec, "ts": _now}
+                    _cache[_tkr] = {"rec": _rec, "ts": _now, "source": "yahoo"}
                 else:
                     _err = st.session_state["_fetch_errors"].get(_tkr, "")
                     if "RateLimit" in _err or "Too Many Requests" in _err:
                         _rate_limited_hit = True
 
             _entry = _cache.get(_tkr)
+            if _entry is None:
+                # Yahoo nema pre tento ticker VOBEC ziadne data (ani stare z
+                # predosleho behu) - skusime zalozny zdroj Stooq (len cena a
+                # rast, bez dividend), aby appka nebola uplne prazdna, kym sa
+                # Yahoo nesprístupni.
+                _stooq_rec = _fetch_stooq_fallback(_tkr)
+                if _stooq_rec is not None:
+                    _cache[_tkr] = {
+                        "rec": _stooq_rec, "ts": _now, "source": "stooq",
+                    }
+                    _entry = _cache[_tkr]
+
             if _entry is not None:
-                stock_records[_tkr] = _entry["rec"]
-                st.session_state.holdings_exchange[_tkr] = _entry["rec"]["exchange"]
-                if (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE:
+                _rec2 = dict(_entry["rec"])
+                if not _rec2.get("exchange"):
+                    _rec2["exchange"] = (
+                        st.session_state.holdings_exchange.get(_tkr, "")
+                        or "N/A"
+                    )
+                stock_records[_tkr] = _rec2
+                st.session_state.holdings_exchange[_tkr] = _rec2["exchange"]
+                if _entry.get("source") == "stooq":
+                    _n_stooq_fallback += 1
+                elif (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE:
                     _n_fresh_ok += 1
                 else:
                     _n_stale += 1
@@ -1032,8 +1133,8 @@ if _all_tickers:
     st.session_state["_fetch_cursor"] = (_start + max(_fresh_attempts, 1)) % _n
 
 st.session_state["_fetch_summary"] = {
-    "fresh": _n_fresh_ok, "stale": _n_stale, "missing": _n_missing,
-    "rate_limited": _rate_limited_hit,
+    "fresh": _n_fresh_ok, "stale": _n_stale, "stooq": _n_stooq_fallback,
+    "missing": _n_missing, "rate_limited": _rate_limited_hit,
 }
 
 # ============================================================
@@ -1342,9 +1443,14 @@ _fetch_errs = st.session_state.get("_fetch_errors", {})
 if st.session_state.holdings and _fsum:
     _badge_bits = []
     if _fsum.get("fresh"):
-        _badge_bits.append(str(_fsum["fresh"]) + " s cerstvymi datami")
+        _badge_bits.append(str(_fsum["fresh"]) + " s cerstvymi datami (Yahoo)")
     if _fsum.get("stale"):
         _badge_bits.append(str(_fsum["stale"]) + " so starsimi datami (cache)")
+    if _fsum.get("stooq"):
+        _badge_bits.append(
+            str(_fsum["stooq"]) + " len cena/rast zo zaloznehou zdroja Stooq "
+            "(bez dividend)"
+        )
     if _fsum.get("missing"):
         _badge_bits.append(str(_fsum["missing"]) + " zatial bez dat")
     _summary_line = ", ".join(_badge_bits) if _badge_bits else "ziadne data"
@@ -1353,14 +1459,14 @@ if st.session_state.holdings and _fsum:
         st.warning(
             "Yahoo Finance momentalne rate-limituje poziadavky z tejto "
             "siete (docasne blokovanie, bezne pri zdielanych IP na "
-            "Streamlit Cloud - nie chyba appky). Appka teraz spomalila "
-            "sťahovanie a pouziva posledne zname data, kde su k "
-            "dispozicii. Stav akcii: " + _summary_line + ". Skus to "
-            "znova o niekolko minut (niekedy to Yahoo blokuje aj "
-            "dlhsie) - portfolio sa automaticky obnovuje kazdych 10 min "
-            "a postupne dotiahne zvysok."
+            "Streamlit Cloud - nie chyba appky). Appka pouziva zalozny "
+            "zdroj (Stooq) na cenu/rast, kde este nema ziadne data, a na "
+            "pozadi dalej skusa Yahoo (jedine zdroj dividend). Stav akcii: "
+            + _summary_line + ". Portfolio sa automaticky obnovuje "
+            "kazdych 10 min a postupne dotiahne zvysok z Yahoo, hned ako "
+            "sa blokovanie uvolni."
         )
-    elif _fsum.get("missing", 0) > 0 or _fsum.get("stale", 0) > 0:
+    elif _fsum.get("missing", 0) > 0 or _fsum.get("stale", 0) > 0 or _fsum.get("stooq", 0) > 0:
         st.info(
             "Stav dat pre akcie: " + _summary_line + ". Chybajuce/stare "
             "sa postupne dotiahnu pri dalsich automatickych obnoveniach "
