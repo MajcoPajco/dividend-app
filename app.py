@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 import streamlit as st
 import pandas as pd
@@ -294,6 +295,53 @@ HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
 GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
 
+def _find_or_create_holdings_ws(sh):
+    """
+    Najde list (tab) s holdings.
+
+    KLUCOVA OPRAVA: povodny kod hladal presne list nazvany "Holdings"
+    a ak ho nenasiel, TICHO vytvoril novy PRAZDNY list s tymto nazvom.
+    Ak realne data boli v liste s inym nazvom (napr. "List1", "Harok1",
+    "Sheet1"...), appka sa "uspesne pripojila" k spravnemu zositu, ale
+    citala/zapisovala do noveho prazdneho listu -> portfolio vyzeralo
+    prazdne aj ked v Google Sheets data vidno.
+
+    Postup:
+    1. Presna zhoda nazvu "Holdings".
+    2. Case-insensitive zhoda nazvu.
+    3. List, ktoreho hlavicka (1. riadok) obsahuje stlpce
+       Ticker/Qty/Exchange (case-insensitive) - pokryje aj ine
+       pomenovanie listu.
+    4. Ak nic z toho, a zosit ma iba jeden list, pouzije ten (nez aby
+       vytvoril druhy, prazdny, a "zatienil" existujuce data).
+    5. Az na koniec: vytvori novy list "Holdings" s hlavickou.
+    """
+    all_ws = sh.worksheets()
+
+    for ws in all_ws:
+        if ws.title == "Holdings":
+            return ws
+    for ws in all_ws:
+        if ws.title.strip().lower() == "holdings":
+            return ws
+
+    expected = {"ticker", "qty", "exchange"}
+    for ws in all_ws:
+        try:
+            header = {str(h).strip().lower() for h in ws.row_values(1)}
+        except Exception:
+            continue
+        if expected.issubset(header):
+            return ws
+
+    if len(all_ws) == 1:
+        return all_ws[0]
+
+    ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
+    ws.update([GSHEET_HEADER], value_input_option="RAW")
+    return ws
+
+
 @st.cache_resource(show_spinner=False)
 def _connect_gsheet():
     if gspread is None or _GoogleCredentials is None:
@@ -312,42 +360,59 @@ def _connect_gsheet():
         )
         gc = gspread.authorize(creds)
         sh = gc.open_by_url(st.secrets["gsheet_url"])
-        try:
-            ws = sh.worksheet("Holdings")
-        except gspread.WorksheetNotFound:
-            ws = sh.add_worksheet(title="Holdings", rows=200, cols=3)
-            ws.update([GSHEET_HEADER], value_input_option="RAW")
-        return ws, {"ok": True, "detail": "Pripojene k: " + sh.title}
+        ws = _find_or_create_holdings_ws(sh)
+        all_vals = ws.get_all_values()
+        n_rows = max(len(all_vals) - 1, 0)
+        header_row = all_vals[0] if all_vals else []
+        sample_row = all_vals[1] if len(all_vals) > 1 else []
+        has_header = bool(header_row) and "ticker" in [
+            str(c).strip().lower() for c in header_row
+        ]
+        return ws, {
+            "ok": True,
+            "detail": ("Pripojene k: " + sh.title + " / list: " + ws.title
+                       + " (" + str(n_rows) + " riadkov dat)"),
+            "header_row": header_row,
+            "sample_row": sample_row,
+            "has_header": has_header,
+        }
     except Exception as e:
         return None, {"ok": False,
                       "detail": "Chyba: " + type(e).__name__ + ": " + str(e)}
 
 
-def _safe_read_records(ws):
+def _read_holdings_rows(ws):
     """
-    Cita zaznamy z GSheets.
+    Cita riadky z listu POZICNE (stlpec A=Ticker, B=Qty, C=Exchange),
+    nezavisle od toho, ci ma list hlavicku alebo nie.
 
-    KLUCOVA OPRAVA:
-    value_render_option='UNFORMATTED_VALUE' vrati cisla ako Python float/int
-    (napr. 2.1), NIE ako locale-formatovany string (napr. "2,1").
-    Bez tohto nastavenia gspread internalna funkcia numericise() odstrani
-    ciarku zo stringu "2,1" a vrati integer 21 – cim korupuje data.
+    KLUCOVA OPRAVA: povodny kod pouzival ws.get_all_records(), ktory
+    VZDY berie 1. riadok ako hlavicku so stlpcami "Ticker"/"Qty"/
+    "Exchange". Ak realny hárok ziadnu hlavicku nema (data zacinaju
+    hned na 1. riadku, napr. "AAPL, 3,22535, NASDAQ"), get_all_records
+    si "Ticker"/"Qty"/"Exchange" nazvy stlpcov jednoducho vymysli
+    z prveho riadku dat (napr. stlpec sa vola doslova "AAPL") a
+    VSETKY riadky sa potom ticho zahodia, lebo ziadny stlpec sa
+    nevola "Ticker".
+
+    Tu citame vzdy surove hodnoty (get_all_values), zisti sa, ci prvy
+    riadok vyzera ako hlavicka (obsahuje bunku "ticker", case-insens.)
+    - ak ano, preskoci sa; ak nie, berie sa ako data. Hodnoty sa citaju
+    ako stringy, takze SK format "2,1" sa spracuje cez parse_qty_input.
     """
-    try:
-        # gspread >= 5.0: podporuje value_render_option priamo
-        return ws.get_all_records(value_render_option="UNFORMATTED_VALUE")
-    except TypeError:
-        pass
-    try:
-        # gspread 3.x / 4.x: numericise_ignore=['ALL'] zabraní
-        # internej konverzii – vsetko pride ako string, ktory
-        # parse_qty_input() spracuje spravne
-        return ws.get_all_records(numericise_ignore=["ALL"])
-    except TypeError:
-        pass
-    # Posledna zachrana – moze korupovat desatinne hodnoty v SK locale,
-    # ale aspon nieco vrati
-    return ws.get_all_records()
+    all_vals = ws.get_all_values()
+    if not all_vals:
+        return []
+    first_row = [str(c).strip().lower() for c in all_vals[0]]
+    has_header = "ticker" in first_row
+    data_rows = all_vals[1:] if has_header else all_vals
+    records = []
+    for row in data_rows:
+        if not any(str(c).strip() for c in row):
+            continue
+        row = list(row) + ["", "", ""]
+        records.append({"ticker": row[0], "qty": row[1], "exchange": row[2]})
+    return records
 
 
 def load_holdings():
@@ -355,13 +420,17 @@ def load_holdings():
     st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
-            records = _safe_read_records(ws)
+            records = _read_holdings_rows(ws)
             result = {}
             for r in records:
-                tkr = str(r.get("Ticker", "")).strip().upper()
+                # Case-insensitive pristup k stlpcom - ak ma hlavicka
+                # v Google Sheets ine velke/male pismena (napr. "ticker"
+                # miesto "Ticker"), nechceme ticho zahodit vsetky riadky.
+                r_norm = {str(k).strip().lower(): v for k, v in r.items()}
+                tkr = str(r_norm.get("ticker", "")).strip().upper()
                 if not tkr:
                     continue
-                raw_qty = r.get("Qty", 0)
+                raw_qty = r_norm.get("qty", 0)
                 if raw_qty == "" or raw_qty is None:
                     qty = 0.0
                 else:
@@ -371,7 +440,7 @@ def load_holdings():
                     qty = parsed if parsed is not None else 0.0
                 result[tkr] = {
                     "qty": qty,
-                    "exchange": r.get("Exchange", ""),
+                    "exchange": r_norm.get("exchange", ""),
                 }
             return result
         except Exception as e:
@@ -651,38 +720,70 @@ def _parse_stock_info(ticker, info, dividends):
     }
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
-def _fetch_growth_data_cached_v4(ticker):
-    t = yf.Ticker(ticker)
-    try:
-        hist = t.history(
-            period="6y", interval="1d", auto_adjust=False)["Close"].dropna()
-    except Exception:
-        hist = None
-    return {
-        "1m": _pct_change_over_period(hist, months=1),
-        "3m": _pct_change_over_period(hist, months=3),
-        "6m": _pct_change_over_period(hist, months=6),
-        "1y": _pct_change_over_period(hist, years=1),
-        "5y": _pct_change_over_period(hist, years=5),
-    }
-
-
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def _fetch_stock_data_cached(ticker):
+    """
+    Stiahne vsetky potrebne udaje pre jeden ticker.
+
+    KLUCOVA OPRAVA (stabilita pri velkom mnozstve drzanych akcii):
+    Povodny kod robil PRE KAZDY TICKER 3 samostatne sietove volania na
+    Yahoo Finance (t.info, t.dividends, t.history pre rast). Pri
+    portfoliu so ~167 akciami to znamena stovky poziadaviek v rychlom
+    slede - to takmer isto vyvola rate-limiting/blokovanie zo strany
+    Yahoo (vysledok: vacsina tickerov vrati prazdne/neuplne data a
+    appka ich ticho vyhodi ako "N/A", zatial co nahodne uspesne/
+    vyrovnavacou pamatou pokryte tickery funguju normalne).
+
+    Tu sa dividendy aj historia ceny pre vypocet rastu ziskaju z
+    JEDNEHO volania t.history(actions=True) namiesto dvoch
+    samostatnych - t.j. 2 sietove volania na ticker miesto 3.
+    Cache TTL je zvyseny (30 min), aby sa pri velkom portfoliu
+    tato zatazujuca davka neopakovala prilis casto.
+    """
     t = yf.Ticker(ticker)
     info = t.info or {}
-    rec = _parse_stock_info(ticker, info, t.dividends)
+
+    try:
+        hist_full = t.history(
+            period="6y", interval="1d", auto_adjust=False, actions=True)
+    except Exception:
+        hist_full = None
+
+    if hist_full is not None and "Close" in hist_full.columns:
+        close_hist = hist_full["Close"].dropna()
+    else:
+        close_hist = None
+
+    if (hist_full is not None and "Dividends" in hist_full.columns
+            and len(hist_full) > 0):
+        dividends = hist_full["Dividends"]
+        dividends = dividends[dividends > 0]
+    else:
+        dividends = pd.Series(dtype=float)
+
+    rec = _parse_stock_info(ticker, info, dividends)
     if rec is None:
         raise _LookupMiss("no price data for " + ticker)
-    rec["growth"] = _fetch_growth_data_cached_v4(ticker)
+    rec["growth"] = {
+        "1m": _pct_change_over_period(close_hist, months=1),
+        "3m": _pct_change_over_period(close_hist, months=3),
+        "6m": _pct_change_over_period(close_hist, months=6),
+        "1y": _pct_change_over_period(close_hist, years=1),
+        "5y": _pct_change_over_period(close_hist, years=5),
+    }
+    # Male oneskorenie LEN pri realnom sietovom fetchi (nie pri zasahu
+    # do cache) - znizuje riziko, ze sa pri velkom portfoliu narazi na
+    # rate-limit Yahoo Finance.
+    time.sleep(0.12)
     return rec
 
 
 def fetch_stock_data(ticker):
     try:
         return _fetch_stock_data_cached(ticker)
-    except Exception:
+    except Exception as e:
+        errs = st.session_state.setdefault("_fetch_errors", {})
+        errs[ticker] = type(e).__name__ + ": " + str(e)[:200]
         return None
 
 
@@ -694,6 +795,12 @@ FREQ_INTERVAL_DAYS = {
     "Polrocne": 182,
     "Rocne": 365,
 }
+
+# Priemerny typicky odstup medzi ex-div datumom a datumom vyplaty,
+# pouzity LEN ako odhad, ked Yahoo Finance neposkytuje potvrdeny
+# buduci datum vyplaty. Skutocny odstup sa lisi podla firmy/burzy
+# (zvycajne cca 2-4 tyzdne pri US akciach).
+PAYOUT_LAG_DAYS_ESTIMATE = 21
 
 
 def project_future_dividend_dates(rec, today, horizon_end, max_events=12):
@@ -844,13 +951,90 @@ if "holdings_exchange" not in st.session_state:
     st.session_state.holdings_exchange = {}
 
 # ── Nacitanie dat akcii ───────────────────────────────────────────────────────
+#
+# KLUCOVA OPRAVA (Yahoo Finance rate-limit pri velkom portfoliu):
+# Yahoo Finance docasne blokuje (YFRateLimitError) IP adresy, ktore v
+# kratkom case posli prilis vela poziadaviek - co je pri portfoliu so
+# ~167 akciami skoro ista vec, najma na zdielanych IP adresach ako
+# Streamlit Community Cloud. Toto NIE JE cisto softverova chyba tejto
+# appky, je to blokovanie na strane Yahoo - ziadna zmena kodu to nevie
+# 100% zarucit, ale da sa vyrazne znizit riziko a hlavne zabranit tomu,
+# aby uz raz uspesne nacitane data zmizli na N/A pri kazdom docasnom
+# zablokovani. Preto:
+#
+#   1) V ramci jedneho behu appky sa NOVO sťahuje len obmedzeny pocet
+#      tickerov (MAX_FRESH_FETCHES_PER_RUN), nie vsetkych naraz.
+#   2) Ak sa objavi rate-limit chyba, dalsie NOVE sťahovania sa v tomto
+#      behu ihned zastavia (nema zmysel skusat zvysok - limit plati
+#      pre cele IP/session, nie per-ticker).
+#   3) Uspesne nacitane data sa uchovavaju v session_state naprieč
+#      behmi (aj po vyprsani vnutorneho cache) - ak sa cerstve
+#      nacitanie nepodari, pouzije sa POSLEDNA ZNAMA hodnota (oznacena
+#      ako "stare data"), namiesto N/A.
+#   4) Poradie tickerov sa pri kazdom behu posuva (round-robin), takze
+#      pocas niekolkych automatickych obnov (appka sa auto-refreshuje
+#      kazdych 10 min) sa postupne prejdu vsetky drzane akcie.
 
+MAX_FRESH_FETCHES_PER_RUN = 15
+FRESH_DATA_MAX_AGE = timedelta(minutes=25)
+
+if "_stock_cache" not in st.session_state:
+    st.session_state["_stock_cache"] = {}
+if "_fetch_cursor" not in st.session_state:
+    st.session_state["_fetch_cursor"] = 0
+
+st.session_state["_fetch_errors"] = {}
+_cache = st.session_state["_stock_cache"]
 stock_records = {}
-for _tkr in list(st.session_state.holdings):
-    _rec = fetch_stock_data(_tkr)
-    if _rec is not None:
-        stock_records[_tkr] = _rec
-        st.session_state.holdings_exchange[_tkr] = _rec["exchange"]
+_n_fresh_ok = 0
+_n_stale = 0
+_n_missing = 0
+_rate_limited_hit = False
+
+_all_tickers = list(st.session_state.holdings)
+if _all_tickers:
+    _now = datetime.now(timezone.utc)
+    _n = len(_all_tickers)
+    _start = st.session_state["_fetch_cursor"] % _n
+    _order = _all_tickers[_start:] + _all_tickers[:_start]
+    _fresh_attempts = 0
+
+    with st.spinner(
+        "Nacitavam data pre " + str(_n) + " akcii z Yahoo Finance..."
+    ):
+        for _tkr in _order:
+            _entry = _cache.get(_tkr)
+            _is_fresh_enough = (
+                _entry is not None and (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE
+            )
+            if (not _is_fresh_enough and not _rate_limited_hit
+                    and _fresh_attempts < MAX_FRESH_FETCHES_PER_RUN):
+                _fresh_attempts += 1
+                _rec = fetch_stock_data(_tkr)
+                if _rec is not None:
+                    _cache[_tkr] = {"rec": _rec, "ts": _now}
+                else:
+                    _err = st.session_state["_fetch_errors"].get(_tkr, "")
+                    if "RateLimit" in _err or "Too Many Requests" in _err:
+                        _rate_limited_hit = True
+
+            _entry = _cache.get(_tkr)
+            if _entry is not None:
+                stock_records[_tkr] = _entry["rec"]
+                st.session_state.holdings_exchange[_tkr] = _entry["rec"]["exchange"]
+                if (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE:
+                    _n_fresh_ok += 1
+                else:
+                    _n_stale += 1
+            else:
+                _n_missing += 1
+
+    st.session_state["_fetch_cursor"] = (_start + max(_fresh_attempts, 1)) % _n
+
+st.session_state["_fetch_summary"] = {
+    "fresh": _n_fresh_ok, "stale": _n_stale, "missing": _n_missing,
+    "rate_limited": _rate_limited_hit,
+}
 
 # ============================================================
 # SEKCIA 1 – PREHLAD BURZ
@@ -923,15 +1107,56 @@ elif _gs_lw.get("ok") is True:
 
 with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
     st.markdown(_sline)
+    if _gs_status.get("header_row") is not None:
+        st.caption(
+            "Zistena hlavicka (1. riadok listu): "
+            + str(_gs_status.get("header_row"))
+        )
+        st.caption(
+            "Ukazka 2. riadku (prve data): "
+            + str(_gs_status.get("sample_row"))
+        )
+        st.caption(
+            "Appka ocakava stlpce presne: Ticker, Qty, Exchange "
+            "(na velkosti pismen nezalezi, ale nazov musi byt tento)."
+        )
+        if _gs_status.get("has_header"):
+            st.caption("Hlavicka rozpoznana - riadok 1 sa preskakuje.")
+        else:
+            st.caption(
+                "Hlavicka NEBOLA rozpoznana - vsetky riadky vratane "
+                "1. sa citaju ako data (stlpec A=Ticker, B=Qty, C=Exchange)."
+            )
     st.caption(
         "Pripojenie na GSheets sa skusa len raz za bezanie appky. "
-        "Ak si zmenil opravnenia, pouzij tlacidlo nizsie."
+        "Ak si zmenil opravnenia alebo dopisal data priamo v Google Sheets, "
+        "pouzi tlacidlo nizsie."
     )
-    if st.button("Skusit pripojenie na GSheets znova"):
-        _connect_gsheet.clear()
-        _, _fresh = _connect_gsheet()
-        st.session_state["gsheet_status"] = _fresh
-        st.rerun()
+    _dcol1, _dcol2 = st.columns(2)
+    with _dcol1:
+        if st.button("Skusit pripojenie na GSheets znova"):
+            _connect_gsheet.clear()
+            _, _fresh = _connect_gsheet()
+            st.session_state["gsheet_status"] = _fresh
+            if _fresh.get("ok"):
+                _reloaded = load_holdings()
+                st.session_state.holdings = {
+                    tkr: rec.get("qty", 0) for tkr, rec in _reloaded.items()
+                }
+                st.session_state.holdings_exchange = {
+                    tkr: rec.get("exchange", "") for tkr, rec in _reloaded.items()
+                }
+            st.rerun()
+    with _dcol2:
+        if st.button("Nacitat portfolio znova z GSheets"):
+            _reloaded = load_holdings()
+            st.session_state.holdings = {
+                tkr: rec.get("qty", 0) for tkr, rec in _reloaded.items()
+            }
+            st.session_state.holdings_exchange = {
+                tkr: rec.get("exchange", "") for tkr, rec in _reloaded.items()
+            }
+            st.rerun()
     st.divider()
     st.caption("Stiahni aktualny stav portfolia ako JSON.")
     _bdata = json.dumps(
@@ -1112,6 +1337,49 @@ if _m:
 
 st.markdown("#### Moje akcie")
 
+_fsum = st.session_state.get("_fetch_summary", {})
+_fetch_errs = st.session_state.get("_fetch_errors", {})
+if st.session_state.holdings and _fsum:
+    _badge_bits = []
+    if _fsum.get("fresh"):
+        _badge_bits.append(str(_fsum["fresh"]) + " s cerstvymi datami")
+    if _fsum.get("stale"):
+        _badge_bits.append(str(_fsum["stale"]) + " so starsimi datami (cache)")
+    if _fsum.get("missing"):
+        _badge_bits.append(str(_fsum["missing"]) + " zatial bez dat")
+    _summary_line = ", ".join(_badge_bits) if _badge_bits else "ziadne data"
+
+    if _fsum.get("rate_limited"):
+        st.warning(
+            "Yahoo Finance momentalne rate-limituje poziadavky z tejto "
+            "siete (docasne blokovanie, bezne pri zdielanych IP na "
+            "Streamlit Cloud - nie chyba appky). Appka teraz spomalila "
+            "sťahovanie a pouziva posledne zname data, kde su k "
+            "dispozicii. Stav akcii: " + _summary_line + ". Skus to "
+            "znova o niekolko minut (niekedy to Yahoo blokuje aj "
+            "dlhsie) - portfolio sa automaticky obnovuje kazdych 10 min "
+            "a postupne dotiahne zvysok."
+        )
+    elif _fsum.get("missing", 0) > 0 or _fsum.get("stale", 0) > 0:
+        st.info(
+            "Stav dat pre akcie: " + _summary_line + ". Chybajuce/stare "
+            "sa postupne dotiahnu pri dalsich automatickych obnoveniach "
+            "(kazdych 10 min)."
+        )
+
+    if _fetch_errs:
+        with st.expander(
+            "Detail chyb pri nacitani (" + str(len(_fetch_errs)) + ")",
+            expanded=False,
+        ):
+            _sample = list(_fetch_errs.items())[:15]
+            for _tk, _msg in _sample:
+                st.caption("**" + _tk + "**: " + _msg)
+            if len(_fetch_errs) > len(_sample):
+                st.caption(
+                    "... a dalsich " + str(len(_fetch_errs) - len(_sample)) + "."
+                )
+
 if not st.session_state.holdings:
     st.info("Zatial nemas pridane ziadne akcie. Pridaj prvu vyssie.")
 else:
@@ -1201,21 +1469,49 @@ else:
     )
 
 # ============================================================
+# Spolocny vypocet: najblizsi buduci ex-div termin pre kazdu drzanu akciu
+# (KLUCOVA OPRAVA: pouziva rovnaku projekciu ako Sekcia 7 - Yahoo Finance
+# totiz vo vacsine pripadov vracia v poli 'exDividendDate'/'dividendDate'
+# len POSLEDNY UZ PRESLY termin, nie buduci. Priamy filter "iba ak je v
+# buducnosti" preto skoro vzdy vsetko vyradil a sekcie boli prazdne.
+# project_future_dividend_dates pouzije potvrdeny buduci datum, ak
+# existuje, inak ho DOPOCITA z frekvencie vyplacania a historie.)
+# ============================================================
+
+_today_div = datetime.now(timezone.utc).date()
+_horizon_div = (pd.Timestamp(_today_div) + pd.DateOffset(months=12)).date()
+
+next_ex_event_by_ticker = {}
+for _tkr in st.session_state.holdings:
+    _rec = stock_records.get(_tkr)
+    if _rec is None:
+        continue
+    _events = project_future_dividend_dates(_rec, _today_div, _horizon_div,
+                                             max_events=1)
+    if _events:
+        next_ex_event_by_ticker[_tkr] = _events[0]
+
+# ============================================================
 # SEKCIA 4 – NAJBLIZZSIE EX-DIV DATUMY
 # ============================================================
 
 st.markdown("#### Najblizzsie Ex-Div datumy")
+st.markdown(
+    "<div class=\"section-note\">Ak akcia nema oficialne oznameny buduci "
+    "Ex-Div datum, termin je ODHADNUTY na zaklade zistenej frekvencie "
+    "vyplacania - oznacene znackou 'Odhad'. Skutocny datum sa moze "
+    "zmenit.</div>",
+    unsafe_allow_html=True,
+)
 
 if not st.session_state.holdings:
     st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad dividend.")
 else:
-    today = datetime.now(timezone.utc).date()
     div_rows = []
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
-        if rec is None or rec["ex_div_date"] is None:
-            continue
-        if rec["ex_div_date"] < today:
+        ev = next_ex_event_by_ticker.get(tkr)
+        if rec is None or ev is None:
             continue
         price = rec["price"]
         last_div = rec["last_div_amount"]
@@ -1228,7 +1524,7 @@ else:
             pct_annual = annual_rate / price * 100
         div_rows.append({
             "ticker": tkr, "name": rec["name"],
-            "ex_date": rec["ex_div_date"],
+            "ex_date": ev["date"], "confirmed": ev["confirmed"],
             "frequency": rec["frequency"],
             "last_div": last_div, "annual_rate": annual_rate,
             "pct_last": pct_last, "pct_annual": pct_annual,
@@ -1237,7 +1533,10 @@ else:
         })
 
     if not div_rows:
-        st.info("Ziadna akcia nema aktualne oznameny buduci Ex-Div datum.")
+        st.info(
+            "Pre drzane akcie sa nepodarilo urcit ani odhadnut buduci "
+            "Ex-Div datum (chyba historia dividend alebo frekvencia)."
+        )
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
         div_rows = div_rows[:40]
@@ -1272,12 +1571,18 @@ else:
             else:
                 expected_str = "N/A"
             g = r.get("growth") or {}
+            status_html = (
+                "<span class=\"freq-badge freq-monthly\">Potvrdene</span>"
+                if r["confirmed"] else
+                "<span class=\"freq-badge freq-quarterly\">Odhad</span>"
+            )
             div_row_parts.append(
                 "<tr>"
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>"
                 "<td>" + r["name"] + "</td>"
                 "<td>1 ks</td>"
                 "<td>" + r["ex_date"].strftime("%d/%m/%y") + "</td>"
+                "<td>" + status_html + "</td>"
                 "<td>" + freq_badge_html(r["frequency"]) + "</td>"
                 "<td>" + growth_cell_html(g.get("1m")) + "</td>"
                 "<td>" + growth_cell_html(g.get("3m")) + "</td>"
@@ -1294,7 +1599,7 @@ else:
         st.markdown(
             "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
             "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
-            "<th>Ex-Div Date</th><th>Frekvencia</th>"
+            "<th>Ex-Div Date</th><th>Status</th><th>Frekvencia</th>"
             "<th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th>"
             "<th>Rast 1R</th><th>Rast 5R</th>"
             "<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>"
@@ -1312,6 +1617,14 @@ else:
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Vyplacane dividendy")
+st.markdown(
+    "<div class=\"section-note\">Ak Yahoo Finance neposkytuje potvrdeny "
+    "buduci datum vyplaty, datum je ODHADNUTY ako najblizsi (potvrdeny "
+    "alebo odhadnuty) Ex-Div termin + priblizny bezny odstup "
+    + str(PAYOUT_LAG_DAYS_ESTIMATE) + " dni - oznacene znackou 'Odhad'. "
+    "Skutocny datum vyplaty sa moze lisit.</div>",
+    unsafe_allow_html=True,
+)
 
 if not st.session_state.holdings:
     st.info("Pridaj akcie vyssie, aby sa tu zobrazil prehlad vyplat.")
@@ -1320,10 +1633,18 @@ else:
     pay_rows = []
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
-        if rec is None or rec.get("pay_div_date") is None:
+        if rec is None:
             continue
-        if rec["pay_div_date"] < today_pay:
-            continue
+        confirmed_pay_date = rec.get("pay_div_date")
+        if confirmed_pay_date is not None and confirmed_pay_date >= today_pay:
+            pay_date = confirmed_pay_date
+            confirmed_pay = True
+        else:
+            ev = next_ex_event_by_ticker.get(tkr)
+            if ev is None:
+                continue
+            pay_date = ev["date"] + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE)
+            confirmed_pay = False
         price = rec["price"]
         last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
@@ -1334,14 +1655,18 @@ else:
         total_div = (last_div * float(qty)) if last_div is not None else None
         pay_rows.append({
             "ticker": tkr, "name": rec["name"],
-            "qty": float(qty), "pay_date": rec["pay_div_date"],
+            "qty": float(qty), "pay_date": pay_date,
+            "confirmed": confirmed_pay,
             "frequency": rec["frequency"], "pct_annual": pct_annual,
             "last_div": last_div, "total_div": total_div,
             "currency": currency,
         })
 
     if not pay_rows:
-        st.info("Ziadna akcia nema oznameny buduci datum vyplaty dividendy.")
+        st.info(
+            "Pre drzane akcie sa nepodarilo urcit ani odhadnut buduci "
+            "datum vyplaty dividendy."
+        )
     else:
         pay_rows.sort(key=lambda r: r["pay_date"])
         pay_rows = pay_rows[:30]
@@ -1359,12 +1684,18 @@ else:
                                           + fmt_num(r["total_div"] * r3, 2) + ")")
             else:
                 total_div_str = "N/A"
+            status_html = (
+                "<span class=\"freq-badge freq-monthly\">Potvrdene</span>"
+                if r["confirmed"] else
+                "<span class=\"freq-badge freq-quarterly\">Odhad</span>"
+            )
             pay_row_parts.append(
                 "<tr>"
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>"
                 "<td>" + r["name"] + "</td>"
                 "<td>" + format_qty(r["qty"]) + " ks</td>"
                 "<td>" + r["pay_date"].strftime("%d/%m/%y") + "</td>"
+                "<td>" + status_html + "</td>"
                 "<td>" + freq_badge_html(r["frequency"]) + "</td>"
                 "<td>" + pct_annual_str + "</td>"
                 "<td>" + last_div_str + "</td>"
@@ -1374,7 +1705,7 @@ else:
         st.markdown(
             "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
             "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
-            "<th>Div Date</th><th>Frekvencia</th>"
+            "<th>Div Date</th><th>Status</th><th>Frekvencia</th>"
             "<th>Rocny Div Yield</th>"
             "<th>Dividenda/akcia</th><th>Dividenda/spolu</th>"
             "</tr></thead><tbody>"
