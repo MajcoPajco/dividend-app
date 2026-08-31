@@ -790,15 +790,24 @@ def fetch_stock_data(ticker):
 
 # ── Zalozny zdroj (Stooq) - LEN cena a rast, ked Yahoo vobec nema data ──────
 #
-# Stooq.com je volne dostupny zdroj historickych cien bez API kluca a bez
-# zdokumentovaneho limitu poziadaviek - vhodny ako zalozny zdroj PRESNE cien
-# a vypoctu rastu (nie vsak dividend - tie Stooq neposkytuje). Pouziva sa
-# LEN vtedy, ked appka pre dany ticker NEMA VOBEC ZIADNE data (ani stare) -
-# t.j. len na vyplnenie medzery, kym sa Yahoo (zdroj dividend) znova
-# nesprístupni. Prekladame LEN burzy, pri ktorych je zhoda formatu tickera
-# medzi Yahoo a Stooq overena a bezpecna (US, Nemecko-Xetra, Hongkong).
-# Pre ostatne burzy (UK, Japonsko, Francuzsko, Svajciarsko, Kanada,
-# Australia, Cina-Shanghai, India, Norsko...) sa NEPREKLADA, aby sa
+# VYPNUTE (STOOQ_FALLBACK_ENABLED = False): diagnostika v appke potvrdila,
+# ze Stooq teraz na svojom CSV exporte (/q/d/l/) vyzaduje JavaScript
+# ("This site requires JavaScript...") - jednoducha HTTP poziadavka (co
+# tato appka robi) teda uz nikdy nedostane pouzitelne data. Kod ostava
+# zachovany pre pripad, ze by sa v buducnosti nasiel iny funkcny sposob
+# pristupu k volnym datam zo Stooq alebo podobneho zdroja - staci prepnut
+# flag na True.
+STOOQ_FALLBACK_ENABLED = False
+
+# Stooq.com je (bol) volne dostupny zdroj historickych cien bez API kluca a
+# bez zdokumentovaneho limitu poziadaviek - vhodny ako zalozny zdroj PRESNE
+# cien a vypoctu rastu (nie vsak dividend - tie Stooq neposkytuje). Pouziva
+# sa LEN vtedy, ked appka pre dany ticker NEMA VOBEC ZIADNE data (ani
+# stare) - t.j. len na vyplnenie medzery, kym sa Yahoo (zdroj dividend)
+# znova nesprístupni. Prekladame LEN burzy, pri ktorych je zhoda formatu
+# tickera medzi Yahoo a Stooq overena a bezpecna (US, Nemecko-Xetra,
+# Hongkong). Pre ostatne burzy (UK, Japonsko, Francuzsko, Svajciarsko,
+# Kanada, Australia, Cina-Shanghai, India, Norsko...) sa NEPREKLADA, aby sa
 # omylom nezobrazili data inej firmy pri nespravnom formate symbolu.
 _STOOQ_SUFFIX_MAP = {"": "us", "DE": "de", "HK": "hk"}
 _STOOQ_SUFFIX_CURRENCY = {"us": "USD", "de": "EUR", "hk": "HKD"}
@@ -1077,8 +1086,15 @@ if "holdings_exchange" not in st.session_state:
 #   4) Poradie tickerov sa pri kazdom behu posuva (round-robin), takze
 #      pocas niekolkych automatickych obnov (appka sa auto-refreshuje
 #      kazdych 10 min) sa postupne prejdu vsetky drzane akcie.
+#
+# MAX_FRESH_FETCHES_PER_RUN bol zvyseny z 15 na 40, kedze diagnostika
+# potvrdila, ze Yahoo momentalne NIE JE blokovane - "rate_limited"
+# poistka (bod 2) appku aj tak okamzite spomali, ak by sa blokovanie
+# niekedy v buducnosti vratilo, takto sa len vyuzije priestor, ked
+# Yahoo funguje.
 
-MAX_FRESH_FETCHES_PER_RUN = 15
+MAX_FRESH_FETCHES_PER_RUN = 40
+MANUAL_FETCH_BATCH_SIZE = 60
 FRESH_DATA_MAX_AGE = timedelta(minutes=25)
 
 if "_stock_cache" not in st.session_state:
@@ -1086,80 +1102,97 @@ if "_stock_cache" not in st.session_state:
 if "_fetch_cursor" not in st.session_state:
     st.session_state["_fetch_cursor"] = 0
 
-st.session_state["_fetch_errors"] = {}
-st.session_state["_stooq_errors"] = {}
-_cache = st.session_state["_stock_cache"]
-stock_records = {}
-_n_fresh_ok = 0
-_n_stale = 0
-_n_stooq_fallback = 0
-_n_missing = 0
-_rate_limited_hit = False
 
-_all_tickers = list(st.session_state.holdings)
-if _all_tickers:
-    _now = datetime.now(timezone.utc)
-    _n = len(_all_tickers)
-    _start = st.session_state["_fetch_cursor"] % _n
-    _order = _all_tickers[_start:] + _all_tickers[:_start]
-    _fresh_attempts = 0
+def _run_fetch_pass(max_attempts, spinner_text=None):
+    """
+    Spusti jeden priebeh sťahovania dat pre drzane akcie: round-robin
+    poradie, cache naprieč behmi, a okamzite zastavenie pri rate-limite.
+    Da sa zavolat viackrat za beh appky (napr. automaticky raz na
+    zaciatku + znova na ziadost pouzivatela cez tlacidlo).
+    Vracia dict {ticker: rec} a suhrnny dict so statistikami.
+    """
+    st.session_state["_fetch_errors"] = {}
+    st.session_state["_stooq_errors"] = {}
+    _cache = st.session_state["_stock_cache"]
+    _records = {}
+    _n_fresh_ok = 0
+    _n_stale = 0
+    _n_stooq_fallback = 0
+    _n_missing = 0
+    _rate_limited_hit = False
 
-    with st.spinner(
-        "Nacitavam data pre " + str(_n) + " akcii..."
-    ):
-        for _tkr in _order:
-            _entry = _cache.get(_tkr)
-            _is_fresh_enough = (
-                _entry is not None and (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE
-            )
-            if (not _is_fresh_enough and not _rate_limited_hit
-                    and _fresh_attempts < MAX_FRESH_FETCHES_PER_RUN):
-                _fresh_attempts += 1
-                _rec = fetch_stock_data(_tkr)
-                if _rec is not None:
-                    _cache[_tkr] = {"rec": _rec, "ts": _now, "source": "yahoo"}
+    _all_tickers = list(st.session_state.holdings)
+    if _all_tickers:
+        _now = datetime.now(timezone.utc)
+        _n = len(_all_tickers)
+        _start = st.session_state["_fetch_cursor"] % _n
+        _order = _all_tickers[_start:] + _all_tickers[:_start]
+        _fresh_attempts = 0
+
+        _spinner_ctx = (
+            st.spinner(spinner_text) if spinner_text
+            else st.spinner("Nacitavam data pre " + str(_n) + " akcii...")
+        )
+        with _spinner_ctx:
+            for _tkr in _order:
+                _entry = _cache.get(_tkr)
+                _is_fresh_enough = (
+                    _entry is not None
+                    and (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE
+                )
+                if (not _is_fresh_enough and not _rate_limited_hit
+                        and _fresh_attempts < max_attempts):
+                    _fresh_attempts += 1
+                    _rec = fetch_stock_data(_tkr)
+                    if _rec is not None:
+                        _cache[_tkr] = {
+                            "rec": _rec, "ts": _now, "source": "yahoo",
+                        }
+                    else:
+                        _err = st.session_state["_fetch_errors"].get(_tkr, "")
+                        if "RateLimit" in _err or "Too Many Requests" in _err:
+                            _rate_limited_hit = True
+
+                _entry = _cache.get(_tkr)
+                if _entry is None and STOOQ_FALLBACK_ENABLED:
+                    _stooq_rec = _fetch_stooq_fallback(_tkr)
+                    if _stooq_rec is not None:
+                        _cache[_tkr] = {
+                            "rec": _stooq_rec, "ts": _now, "source": "stooq",
+                        }
+                        _entry = _cache[_tkr]
+
+                if _entry is not None:
+                    _rec2 = dict(_entry["rec"])
+                    if not _rec2.get("exchange"):
+                        _rec2["exchange"] = (
+                            st.session_state.holdings_exchange.get(_tkr, "")
+                            or "N/A"
+                        )
+                    _records[_tkr] = _rec2
+                    st.session_state.holdings_exchange[_tkr] = _rec2["exchange"]
+                    if _entry.get("source") == "stooq":
+                        _n_stooq_fallback += 1
+                    elif (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE:
+                        _n_fresh_ok += 1
+                    else:
+                        _n_stale += 1
                 else:
-                    _err = st.session_state["_fetch_errors"].get(_tkr, "")
-                    if "RateLimit" in _err or "Too Many Requests" in _err:
-                        _rate_limited_hit = True
+                    _n_missing += 1
 
-            _entry = _cache.get(_tkr)
-            if _entry is None:
-                # Yahoo nema pre tento ticker VOBEC ziadne data (ani stare z
-                # predosleho behu) - skusime zalozny zdroj Stooq (len cena a
-                # rast, bez dividend), aby appka nebola uplne prazdna, kym sa
-                # Yahoo nesprístupni.
-                _stooq_rec = _fetch_stooq_fallback(_tkr)
-                if _stooq_rec is not None:
-                    _cache[_tkr] = {
-                        "rec": _stooq_rec, "ts": _now, "source": "stooq",
-                    }
-                    _entry = _cache[_tkr]
+        st.session_state["_fetch_cursor"] = (
+            (_start + max(_fresh_attempts, 1)) % _n
+        )
 
-            if _entry is not None:
-                _rec2 = dict(_entry["rec"])
-                if not _rec2.get("exchange"):
-                    _rec2["exchange"] = (
-                        st.session_state.holdings_exchange.get(_tkr, "")
-                        or "N/A"
-                    )
-                stock_records[_tkr] = _rec2
-                st.session_state.holdings_exchange[_tkr] = _rec2["exchange"]
-                if _entry.get("source") == "stooq":
-                    _n_stooq_fallback += 1
-                elif (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE:
-                    _n_fresh_ok += 1
-                else:
-                    _n_stale += 1
-            else:
-                _n_missing += 1
+    summary = {
+        "fresh": _n_fresh_ok, "stale": _n_stale, "stooq": _n_stooq_fallback,
+        "missing": _n_missing, "rate_limited": _rate_limited_hit,
+    }
+    return _records, summary
 
-    st.session_state["_fetch_cursor"] = (_start + max(_fresh_attempts, 1)) % _n
 
-st.session_state["_fetch_summary"] = {
-    "fresh": _n_fresh_ok, "stale": _n_stale, "stooq": _n_stooq_fallback,
-    "missing": _n_missing, "rate_limited": _rate_limited_hit,
-}
+stock_records, _fetch_summary_now = _run_fetch_pass(MAX_FRESH_FETCHES_PER_RUN)
+st.session_state["_fetch_summary"] = _fetch_summary_now
 
 # ============================================================
 # SEKCIA 1 – PREHLAD BURZ
@@ -1496,6 +1529,20 @@ if st.session_state.holdings and _fsum:
             "sa postupne dotiahnu pri dalsich automatickych obnoveniach "
             "(kazdych 10 min)."
         )
+
+    if _fsum.get("missing", 0) > 0:
+        if st.button(
+            "Stiahnut dalsiu davku teraz (~" + str(MANUAL_FETCH_BATCH_SIZE)
+            + " akcii, bez cakania na auto-obnovenie)"
+        ):
+            _run_fetch_pass(
+                MANUAL_FETCH_BATCH_SIZE,
+                spinner_text=(
+                    "Stahujem dalsiu davku (" + str(MANUAL_FETCH_BATCH_SIZE)
+                    + " akcii)..."
+                ),
+            )
+            st.rerun()
 
     if _fetch_errs:
         with st.expander(
