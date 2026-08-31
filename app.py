@@ -821,31 +821,54 @@ def _fetch_stooq_fallback(ticker):
     stooq_symbol = _yahoo_ticker_to_stooq_symbol(ticker)
     if stooq_symbol is None:
         return None
+    _errs = st.session_state.setdefault("_stooq_errors", {})
     try:
         resp = requests.get(
             "https://stooq.com/q/d/l/",
             params={"s": stooq_symbol, "i": "d"},
             timeout=10,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/csv,text/plain,*/*",
+            },
         )
-        resp.raise_for_status()
+        status = resp.status_code
         text = resp.text
-    except Exception:
+    except Exception as e:
+        _errs[ticker] = "sietova chyba: " + type(e).__name__ + ": " + str(e)[:150]
+        return None
+
+    if status != 200:
+        _errs[ticker] = "HTTP " + str(status) + ": " + text[:150]
         return None
 
     lines = text.strip().splitlines() if text else []
     if len(lines) < 2 or not lines[0].startswith("Date,"):
-        return None  # Stooq vrati text bez CSV hlavicky pri neplatnom symbole
+        # Stooq vrati text bez CSV hlavicky pri neplatnom symbole / blokovani
+        _errs[ticker] = (
+            "neplatna odpoved (symbol=" + stooq_symbol + "): "
+            + text[:150].replace("\n", " ")
+        )
+        return None
     try:
         df = pd.read_csv(io.StringIO(text))
-    except Exception:
+    except Exception as e:
+        _errs[ticker] = "chyba parsovania CSV: " + str(e)[:150]
         return None
     if df.empty or "Close" not in df.columns:
+        _errs[ticker] = "prazdne/neocakavane CSV (stlpce: " + str(list(df.columns)) + ")"
         return None
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.dropna(subset=["Close"]).sort_values("Date")
     if df.empty:
+        _errs[ticker] = "CSV bez pouzitelnych riadkov Close"
         return None
 
+    _errs.pop(ticker, None)
     close_hist = df.set_index("Date")["Close"]
     price = float(close_hist.iloc[-1])
     suf = stooq_symbol.rsplit(".", 1)[-1]
@@ -1064,6 +1087,7 @@ if "_fetch_cursor" not in st.session_state:
     st.session_state["_fetch_cursor"] = 0
 
 st.session_state["_fetch_errors"] = {}
+st.session_state["_stooq_errors"] = {}
 _cache = st.session_state["_stock_cache"]
 stock_records = {}
 _n_fresh_ok = 0
@@ -1475,7 +1499,7 @@ if st.session_state.holdings and _fsum:
 
     if _fetch_errs:
         with st.expander(
-            "Detail chyb pri nacitani (" + str(len(_fetch_errs)) + ")",
+            "Detail chyb pri nacitani z Yahoo (" + str(len(_fetch_errs)) + ")",
             expanded=False,
         ):
             _sample = list(_fetch_errs.items())[:15]
@@ -1484,6 +1508,20 @@ if st.session_state.holdings and _fsum:
             if len(_fetch_errs) > len(_sample):
                 st.caption(
                     "... a dalsich " + str(len(_fetch_errs) - len(_sample)) + "."
+                )
+
+    _stooq_errs = st.session_state.get("_stooq_errors", {})
+    if _stooq_errs:
+        with st.expander(
+            "Detail chyb pri nacitani zo Stooq (" + str(len(_stooq_errs)) + ")",
+            expanded=False,
+        ):
+            _sample2 = list(_stooq_errs.items())[:15]
+            for _tk, _msg in _sample2:
+                st.caption("**" + _tk + "**: " + _msg)
+            if len(_stooq_errs) > len(_sample2):
+                st.caption(
+                    "... a dalsich " + str(len(_stooq_errs) - len(_sample2)) + "."
                 )
 
 if not st.session_state.holdings:
