@@ -431,6 +431,12 @@ def load_holdings():
                 tkr = str(r_norm.get("ticker", "")).strip().upper()
                 if not tkr:
                     continue
+                if tkr in ("TICKER", "SYMBOL"):
+                    # Ochrana pred nahodne duplicitnym/preneseny hlavickovym
+                    # riadkom niekde v strede hárku (nie na 1. riadku, tam
+                    # by ho uz _read_holdings_rows spravne preskocilo) -
+                    # takyto riadok nie je skutocna drzana akcia.
+                    continue
                 raw_qty = r_norm.get("qty", 0)
                 if raw_qty == "" or raw_qty is None:
                     qty = 0.0
@@ -1531,6 +1537,12 @@ if st.session_state.holdings and _fsum:
         )
 
     if _fsum.get("missing", 0) > 0:
+        st.caption(
+            "Automaticky beh (na pozadi, kazdych 10 min) sťahuje najviac "
+            + str(MAX_FRESH_FETCHES_PER_RUN) + " akcii naraz (setrne k "
+            "Yahoo). Tlacidlo nizsie je NAVYSE pre teba - stiahne rovno "
+            "dalsich az " + str(MANUAL_FETCH_BATCH_SIZE) + " bez cakania."
+        )
         if st.button(
             "Stiahnut dalsiu davku teraz (~" + str(MANUAL_FETCH_BATCH_SIZE)
             + " akcii, bez cakania na auto-obnovenie)"
