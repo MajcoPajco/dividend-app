@@ -6,7 +6,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import yfinance as yf
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from zoneinfo import ZoneInfo
 import requests
 
@@ -293,6 +293,7 @@ def growth_cell_html(val):
 # ── Suborove cesty a GSheets ──────────────────────────────────────────────────
 
 HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
+STOCK_CACHE_FILE = Path(__file__).resolve().parent / "stock_data_cache.json"
 GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
 
@@ -794,115 +795,109 @@ def fetch_stock_data(ticker):
         return None
 
 
-# ── Zalozny zdroj (Stooq) - LEN cena a rast, ked Yahoo vobec nema data ──────
+# ── Perzistentna cache stiahnutych dat (prezije reload/novu session) ───────
 #
-# VYPNUTE (STOOQ_FALLBACK_ENABLED = False): diagnostika v appke potvrdila,
-# ze Stooq teraz na svojom CSV exporte (/q/d/l/) vyzaduje JavaScript
-# ("This site requires JavaScript...") - jednoducha HTTP poziadavka (co
-# tato appka robi) teda uz nikdy nedostane pouzitelne data. Kod ostava
-# zachovany pre pripad, ze by sa v buducnosti nasiel iny funkcny sposob
-# pristupu k volnym datam zo Stooq alebo podobneho zdroja - staci prepnut
-# flag na True.
-STOOQ_FALLBACK_ENABLED = False
+# KLUCOVA VLASTNOST: predtym sa uspesne stiahnute data akcii uchovavali
+# LEN v st.session_state, co je viazane na jednu prehliadacovu session -
+# pri kazdom obnoveni stranky / novej navsteve appka zacinala od nuly a
+# kym sa znova nestiahli data z Yahoo, tabulka ukazovala N/A. Teraz sa
+# vsetky uspesne stiahnute data zaroven ukladaju do lokalneho JSON
+# suboru, takze:
+#   - pri kazdom (aj uplne novom) spusteni appky sa okamzite nacitaju
+#     POSLEDNE ZNAME data (aj ked su stare tretaj den), takze v tabulke
+#     uz nikdy nie je prazdno/N/A pre akciu, ktora sa aspon raz v
+#     minulosti uspesne stiahla,
+#   - appka vzdy vie povedat, KEDY presne boli dane data naposledy
+#     aktualizovane (zobrazene v sekcii "Moje akcie").
+#
+# POZOR: toto prezije reload stranky a novu session v ramci bezaneho
+# serveroveho procesu appky. Ak by appka bezala na prostredi s
+# efemernym uloziskom (napr. Streamlit Community Cloud po uplnom
+# reštarte/redeploy), tento subor sa moze vynulovat - v tom pripade sa
+# appka jednoducho zacne znova postupne napĺňať tak, ako doteraz.
 
-# Stooq.com je (bol) volne dostupny zdroj historickych cien bez API kluca a
-# bez zdokumentovaneho limitu poziadaviek - vhodny ako zalozny zdroj PRESNE
-# cien a vypoctu rastu (nie vsak dividend - tie Stooq neposkytuje). Pouziva
-# sa LEN vtedy, ked appka pre dany ticker NEMA VOBEC ZIADNE data (ani
-# stare) - t.j. len na vyplnenie medzery, kym sa Yahoo (zdroj dividend)
-# znova nesprístupni. Prekladame LEN burzy, pri ktorych je zhoda formatu
-# tickera medzi Yahoo a Stooq overena a bezpecna (US, Nemecko-Xetra,
-# Hongkong). Pre ostatne burzy (UK, Japonsko, Francuzsko, Svajciarsko,
-# Kanada, Australia, Cina-Shanghai, India, Norsko...) sa NEPREKLADA, aby sa
-# omylom nezobrazili data inej firmy pri nespravnom formate symbolu.
-_STOOQ_SUFFIX_MAP = {"": "us", "DE": "de", "HK": "hk"}
-_STOOQ_SUFFIX_CURRENCY = {"us": "USD", "de": "EUR", "hk": "HKD"}
-
-
-def _yahoo_ticker_to_stooq_symbol(ticker):
-    if "." in ticker:
-        base, _, suf = ticker.rpartition(".")
-        suf = suf.upper()
+def _serialize_rec_for_cache(rec):
+    r = dict(rec)
+    ex_d = r.get("ex_div_date")
+    r["ex_div_date"] = ex_d.isoformat() if ex_d else None
+    pay_d = r.get("pay_div_date")
+    r["pay_div_date"] = pay_d.isoformat() if pay_d else None
+    dh = r.get("dividends_history")
+    if dh is not None and len(dh) > 0:
+        try:
+            r["dividends_history"] = [
+                [str(pd.Timestamp(idx).date()), float(val)]
+                for idx, val in dh.items()
+            ]
+        except Exception:
+            r["dividends_history"] = None
     else:
-        base, suf = ticker, ""
-    stooq_suf = _STOOQ_SUFFIX_MAP.get(suf)
-    if stooq_suf is None:
-        return None
-    return base.lower() + "." + stooq_suf
+        r["dividends_history"] = None
+    return r
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def _fetch_stooq_fallback(ticker):
-    stooq_symbol = _yahoo_ticker_to_stooq_symbol(ticker)
-    if stooq_symbol is None:
-        return None
-    _errs = st.session_state.setdefault("_stooq_errors", {})
+def _deserialize_rec_from_cache(r):
+    r = dict(r)
     try:
-        resp = requests.get(
-            "https://stooq.com/q/d/l/",
-            params={"s": stooq_symbol, "i": "d"},
-            timeout=10,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/csv,text/plain,*/*",
-            },
+        r["ex_div_date"] = (
+            date.fromisoformat(r["ex_div_date"]) if r.get("ex_div_date") else None
         )
-        status = resp.status_code
-        text = resp.text
-    except Exception as e:
-        _errs[ticker] = "sietova chyba: " + type(e).__name__ + ": " + str(e)[:150]
-        return None
-
-    if status != 200:
-        _errs[ticker] = "HTTP " + str(status) + ": " + text[:150]
-        return None
-
-    lines = text.strip().splitlines() if text else []
-    if len(lines) < 2 or not lines[0].startswith("Date,"):
-        # Stooq vrati text bez CSV hlavicky pri neplatnom symbole / blokovani
-        _errs[ticker] = (
-            "neplatna odpoved (symbol=" + stooq_symbol + "): "
-            + text[:150].replace("\n", " ")
-        )
-        return None
+    except Exception:
+        r["ex_div_date"] = None
     try:
-        df = pd.read_csv(io.StringIO(text))
-    except Exception as e:
-        _errs[ticker] = "chyba parsovania CSV: " + str(e)[:150]
-        return None
-    if df.empty or "Close" not in df.columns:
-        _errs[ticker] = "prazdne/neocakavane CSV (stlpce: " + str(list(df.columns)) + ")"
-        return None
-    df["Date"] = pd.to_datetime(df["Date"])
-    df = df.dropna(subset=["Close"]).sort_values("Date")
-    if df.empty:
-        _errs[ticker] = "CSV bez pouzitelnych riadkov Close"
-        return None
+        r["pay_div_date"] = (
+            date.fromisoformat(r["pay_div_date"]) if r.get("pay_div_date") else None
+        )
+    except Exception:
+        r["pay_div_date"] = None
+    dh = r.get("dividends_history")
+    if dh:
+        try:
+            idx = pd.DatetimeIndex([d for d, _ in dh])
+            vals = [v for _, v in dh]
+            r["dividends_history"] = pd.Series(vals, index=idx)
+        except Exception:
+            r["dividends_history"] = pd.Series(dtype=float)
+    else:
+        r["dividends_history"] = pd.Series(dtype=float)
+    return r
 
-    _errs.pop(ticker, None)
-    close_hist = df.set_index("Date")["Close"]
-    price = float(close_hist.iloc[-1])
-    suf = stooq_symbol.rsplit(".", 1)[-1]
-    currency = _STOOQ_SUFFIX_CURRENCY.get(suf, "")
-    time.sleep(0.1)
-    return {
-        "ticker": ticker, "name": ticker, "currency": currency,
-        "price": price, "exchange": "", "exchange_code": "", "country": "",
-        "last_div_amount": None, "ex_div_date": None, "pay_div_date": None,
-        "annual_rate": None, "dividend_yield_pct": None, "frequency": "N/A",
-        "dividends_history": None,
-        "growth": {
-            "1m": _pct_change_over_period(close_hist, months=1),
-            "3m": _pct_change_over_period(close_hist, months=3),
-            "6m": _pct_change_over_period(close_hist, months=6),
-            "1y": _pct_change_over_period(close_hist, years=1),
-            "5y": _pct_change_over_period(close_hist, years=5),
-        },
-    }
+
+def _load_stock_cache_from_disk():
+    if not STOCK_CACHE_FILE.exists():
+        return {}
+    try:
+        with open(STOCK_CACHE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return {}
+    cache = {}
+    for tkr, entry in (raw or {}).items():
+        try:
+            cache[tkr] = {
+                "ts": datetime.fromisoformat(entry["ts"]),
+                "source": entry.get("source", "yahoo"),
+                "rec": _deserialize_rec_from_cache(entry["rec"]),
+            }
+        except Exception:
+            continue
+    return cache
+
+
+def _save_stock_cache_to_disk(cache):
+    try:
+        raw = {
+            tkr: {
+                "ts": entry["ts"].isoformat(),
+                "source": entry.get("source", "yahoo"),
+                "rec": _serialize_rec_for_cache(entry["rec"]),
+            }
+            for tkr, entry in cache.items()
+        }
+        with open(STOCK_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(raw, f, ensure_ascii=False)
+    except Exception:
+        pass
 
 
 # ── Projekcia buducich dividend ─────────────────────────────────────────────
@@ -1085,26 +1080,20 @@ if "holdings_exchange" not in st.session_state:
 #   2) Ak sa objavi rate-limit chyba, dalsie NOVE sťahovania sa v tomto
 #      behu ihned zastavia (nema zmysel skusat zvysok - limit plati
 #      pre cele IP/session, nie per-ticker).
-#   3) Uspesne nacitane data sa uchovavaju v session_state naprieč
-#      behmi (aj po vyprsani vnutorneho cache) - ak sa cerstve
-#      nacitanie nepodari, pouzije sa POSLEDNA ZNAMA hodnota (oznacena
-#      ako "stare data"), namiesto N/A.
+#   3) Uspesne nacitane data sa uchovavaju TRVALO (lokalny JSON subor,
+#      nie len session_state) - ak sa cerstve nacitanie nepodari,
+#      pouzije sa POSLEDNA ZNAMA hodnota (oznacena ako "stare data"),
+#      namiesto N/A. Toto plati aj pri restarte appky/novej session.
 #   4) Poradie tickerov sa pri kazdom behu posuva (round-robin), takze
 #      pocas niekolkych automatickych obnov (appka sa auto-refreshuje
 #      kazdych 10 min) sa postupne prejdu vsetky drzane akcie.
-#
-# MAX_FRESH_FETCHES_PER_RUN bol zvyseny z 15 na 40, kedze diagnostika
-# potvrdila, ze Yahoo momentalne NIE JE blokovane - "rate_limited"
-# poistka (bod 2) appku aj tak okamzite spomali, ak by sa blokovanie
-# niekedy v buducnosti vratilo, takto sa len vyuzije priestor, ked
-# Yahoo funguje.
 
 MAX_FRESH_FETCHES_PER_RUN = 40
 MANUAL_FETCH_BATCH_SIZE = 60
 FRESH_DATA_MAX_AGE = timedelta(minutes=25)
 
 if "_stock_cache" not in st.session_state:
-    st.session_state["_stock_cache"] = {}
+    st.session_state["_stock_cache"] = _load_stock_cache_from_disk()
 if "_fetch_cursor" not in st.session_state:
     st.session_state["_fetch_cursor"] = 0
 
@@ -1112,20 +1101,20 @@ if "_fetch_cursor" not in st.session_state:
 def _run_fetch_pass(max_attempts, spinner_text=None):
     """
     Spusti jeden priebeh sťahovania dat pre drzane akcie: round-robin
-    poradie, cache naprieč behmi, a okamzite zastavenie pri rate-limite.
-    Da sa zavolat viackrat za beh appky (napr. automaticky raz na
-    zaciatku + znova na ziadost pouzivatela cez tlacidlo).
+    poradie, trvala cache naprieč behmi/session/restartami appky, a
+    okamzite zastavenie pri rate-limite. Da sa zavolat viackrat za beh
+    appky (napr. automaticky raz na zaciatku + znova na ziadost
+    pouzivatela cez tlacidlo v sekcii "Sprava dat").
     Vracia dict {ticker: rec} a suhrnny dict so statistikami.
     """
     st.session_state["_fetch_errors"] = {}
-    st.session_state["_stooq_errors"] = {}
     _cache = st.session_state["_stock_cache"]
     _records = {}
     _n_fresh_ok = 0
     _n_stale = 0
-    _n_stooq_fallback = 0
     _n_missing = 0
     _rate_limited_hit = False
+    _fresh_attempts = 0
 
     _all_tickers = list(st.session_state.holdings)
     if _all_tickers:
@@ -1133,7 +1122,6 @@ def _run_fetch_pass(max_attempts, spinner_text=None):
         _n = len(_all_tickers)
         _start = st.session_state["_fetch_cursor"] % _n
         _order = _all_tickers[_start:] + _all_tickers[:_start]
-        _fresh_attempts = 0
 
         _spinner_ctx = (
             st.spinner(spinner_text) if spinner_text
@@ -1160,14 +1148,6 @@ def _run_fetch_pass(max_attempts, spinner_text=None):
                             _rate_limited_hit = True
 
                 _entry = _cache.get(_tkr)
-                if _entry is None and STOOQ_FALLBACK_ENABLED:
-                    _stooq_rec = _fetch_stooq_fallback(_tkr)
-                    if _stooq_rec is not None:
-                        _cache[_tkr] = {
-                            "rec": _stooq_rec, "ts": _now, "source": "stooq",
-                        }
-                        _entry = _cache[_tkr]
-
                 if _entry is not None:
                     _rec2 = dict(_entry["rec"])
                     if not _rec2.get("exchange"):
@@ -1177,9 +1157,7 @@ def _run_fetch_pass(max_attempts, spinner_text=None):
                         )
                     _records[_tkr] = _rec2
                     st.session_state.holdings_exchange[_tkr] = _rec2["exchange"]
-                    if _entry.get("source") == "stooq":
-                        _n_stooq_fallback += 1
-                    elif (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE:
+                    if (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE:
                         _n_fresh_ok += 1
                     else:
                         _n_stale += 1
@@ -1189,16 +1167,62 @@ def _run_fetch_pass(max_attempts, spinner_text=None):
         st.session_state["_fetch_cursor"] = (
             (_start + max(_fresh_attempts, 1)) % _n
         )
+        if _fresh_attempts > 0:
+            _save_stock_cache_to_disk(_cache)
 
     summary = {
-        "fresh": _n_fresh_ok, "stale": _n_stale, "stooq": _n_stooq_fallback,
+        "fresh": _n_fresh_ok, "stale": _n_stale,
         "missing": _n_missing, "rate_limited": _rate_limited_hit,
     }
     return _records, summary
 
 
+def _data_freshness_caption():
+    """
+    Vrati kratky text ('Data k: 40 dnes 14:32, 20 vcera (08.09.), 108
+    zatial bez dat') zoradeny podla toho, KEDY boli data pre drzane
+    akcie naposledy uspesne stiahnute - pocitane z trvalej cache, takze
+    plati aj hned po restarte appky.
+    """
+    _cache = st.session_state.get("_stock_cache", {})
+    if not st.session_state.holdings:
+        return None
+    _now_local = datetime.now(BRATISLAVA_TZ)
+    _today = _now_local.date()
+    _yesterday = _today - timedelta(days=1)
+    _buckets = {}
+    _newest_by_bucket = {}
+    _n_missing = 0
+    for _tkr in st.session_state.holdings:
+        _entry = _cache.get(_tkr)
+        if _entry is None:
+            _n_missing += 1
+            continue
+        _ts_local = _entry["ts"].astimezone(BRATISLAVA_TZ)
+        _d = _ts_local.date()
+        _buckets[_d] = _buckets.get(_d, 0) + 1
+        if _d not in _newest_by_bucket or _ts_local > _newest_by_bucket[_d]:
+            _newest_by_bucket[_d] = _ts_local
+    _parts = []
+    for _d in sorted(_buckets.keys(), reverse=True):
+        _cnt = _buckets[_d]
+        _t = _newest_by_bucket[_d].strftime("%H:%M")
+        if _d == _today:
+            _parts.append(str(_cnt) + " dnes (" + _t + ")")
+        elif _d == _yesterday:
+            _parts.append(str(_cnt) + " vcera (" + _t + ")")
+        else:
+            _parts.append(str(_cnt) + " " + _d.strftime("%d.%m.%Y"))
+    if _n_missing:
+        _parts.append(str(_n_missing) + " zatial bez dat")
+    if not _parts:
+        return None
+    return "Data k: " + ", ".join(_parts)
+
+
 stock_records, _fetch_summary_now = _run_fetch_pass(MAX_FRESH_FETCHES_PER_RUN)
 st.session_state["_fetch_summary"] = _fetch_summary_now
+
 
 # ============================================================
 # SEKCIA 1 – PREHLAD BURZ
@@ -1269,7 +1293,8 @@ if _gs_lw.get("ok") is False:
 elif _gs_lw.get("ok") is True:
     _sline += "  " + _NL + str(_gs_lw.get("detail", ""))
 
-with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
+with st.expander("Sprava dat", expanded=not _gs_status["ok"]):
+    st.markdown("**Google Sheets (portfolio)**")
     st.markdown(_sline)
     if _gs_status.get("header_row") is not None:
         st.caption(
@@ -1335,6 +1360,59 @@ with st.expander("Diagnostika ukladania dat", expanded=not _gs_status["ok"]):
         file_name="holdings_backup_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
         mime="application/json",
     )
+
+    st.divider()
+    st.markdown("**Data o akciach (Yahoo Finance)**")
+    _fsum_early = st.session_state.get("_fetch_summary", {})
+    _freshness_cap_early = _data_freshness_caption()
+    if _freshness_cap_early:
+        st.caption(_freshness_cap_early)
+    _badge_bits = []
+    if _fsum_early.get("fresh"):
+        _badge_bits.append(str(_fsum_early["fresh"]) + " s cerstvymi datami")
+    if _fsum_early.get("stale"):
+        _badge_bits.append(str(_fsum_early["stale"]) + " so starsimi datami (cache)")
+    if _fsum_early.get("missing"):
+        _badge_bits.append(str(_fsum_early["missing"]) + " zatial bez dat")
+    if _badge_bits:
+        st.caption("Podrobne: " + ", ".join(_badge_bits) + ".")
+    st.caption(
+        "Data sa uchovavaju trvalo (lokalny subor) - raz uspesne "
+        "stiahnuta akcia uz nezmizne na N/A, aj po restarte appky. "
+        "Automaticky beh na pozadi (kazdych 10 min) sťahuje najviac "
+        + str(MAX_FRESH_FETCHES_PER_RUN) + " akcii naraz, setrne k "
+        "Yahoo Finance (ochrana proti rate-limitu). Tlacidlo nizsie je "
+        "NAVYSE pre teba - stiahne rovno dalsich az "
+        + str(MANUAL_FETCH_BATCH_SIZE) + " akcii bez cakania."
+    )
+    if st.button(
+        "Aktualizovat data z Yahoo Finance teraz (~"
+        + str(MANUAL_FETCH_BATCH_SIZE) + " akcii)"
+    ):
+        _run_fetch_pass(
+            MANUAL_FETCH_BATCH_SIZE,
+            spinner_text=(
+                "Stahujem dalsiu davku (" + str(MANUAL_FETCH_BATCH_SIZE)
+                + " akcii)..."
+            ),
+        )
+        st.rerun()
+
+    _fetch_errs_early = st.session_state.get("_fetch_errors", {})
+    if _fetch_errs_early:
+        with st.expander(
+            "Detail chyb pri poslednom nacitani z Yahoo ("
+            + str(len(_fetch_errs_early)) + ")",
+            expanded=False,
+        ):
+            _sample = list(_fetch_errs_early.items())[:15]
+            for _tk, _msg in _sample:
+                st.caption("**" + _tk + "**: " + _msg)
+            if len(_fetch_errs_early) > len(_sample):
+                st.caption(
+                    "... a dalsich "
+                    + str(len(_fetch_errs_early) - len(_sample)) + "."
+                )
 
 st.markdown("#### Pridat / odobrat akciu")
 
@@ -1503,85 +1581,20 @@ st.markdown("#### Moje akcie")
 
 _fsum = st.session_state.get("_fetch_summary", {})
 _fetch_errs = st.session_state.get("_fetch_errors", {})
-if st.session_state.holdings and _fsum:
-    _badge_bits = []
-    if _fsum.get("fresh"):
-        _badge_bits.append(str(_fsum["fresh"]) + " s cerstvymi datami (Yahoo)")
-    if _fsum.get("stale"):
-        _badge_bits.append(str(_fsum["stale"]) + " so starsimi datami (cache)")
-    if _fsum.get("stooq"):
-        _badge_bits.append(
-            str(_fsum["stooq"]) + " len cena/rast zo zaloznehou zdroja Stooq "
-            "(bez dividend)"
-        )
-    if _fsum.get("missing"):
-        _badge_bits.append(str(_fsum["missing"]) + " zatial bez dat")
-    _summary_line = ", ".join(_badge_bits) if _badge_bits else "ziadne data"
+_freshness_cap = _data_freshness_caption()
+if _freshness_cap:
+    st.caption(_freshness_cap)
 
-    if _fsum.get("rate_limited"):
-        st.warning(
-            "Yahoo Finance momentalne rate-limituje poziadavky z tejto "
-            "siete (docasne blokovanie, bezne pri zdielanych IP na "
-            "Streamlit Cloud - nie chyba appky). Appka pouziva zalozny "
-            "zdroj (Stooq) na cenu/rast, kde este nema ziadne data, a na "
-            "pozadi dalej skusa Yahoo (jedine zdroj dividend). Stav akcii: "
-            + _summary_line + ". Portfolio sa automaticky obnovuje "
-            "kazdych 10 min a postupne dotiahne zvysok z Yahoo, hned ako "
-            "sa blokovanie uvolni."
-        )
-    elif _fsum.get("missing", 0) > 0 or _fsum.get("stale", 0) > 0 or _fsum.get("stooq", 0) > 0:
-        st.info(
-            "Stav dat pre akcie: " + _summary_line + ". Chybajuce/stare "
-            "sa postupne dotiahnu pri dalsich automatickych obnoveniach "
-            "(kazdych 10 min)."
-        )
-
-    if _fsum.get("missing", 0) > 0:
-        st.caption(
-            "Automaticky beh (na pozadi, kazdych 10 min) sťahuje najviac "
-            + str(MAX_FRESH_FETCHES_PER_RUN) + " akcii naraz (setrne k "
-            "Yahoo). Tlacidlo nizsie je NAVYSE pre teba - stiahne rovno "
-            "dalsich az " + str(MANUAL_FETCH_BATCH_SIZE) + " bez cakania."
-        )
-        if st.button(
-            "Stiahnut dalsiu davku teraz (~" + str(MANUAL_FETCH_BATCH_SIZE)
-            + " akcii, bez cakania na auto-obnovenie)"
-        ):
-            _run_fetch_pass(
-                MANUAL_FETCH_BATCH_SIZE,
-                spinner_text=(
-                    "Stahujem dalsiu davku (" + str(MANUAL_FETCH_BATCH_SIZE)
-                    + " akcii)..."
-                ),
-            )
-            st.rerun()
-
-    if _fetch_errs:
-        with st.expander(
-            "Detail chyb pri nacitani z Yahoo (" + str(len(_fetch_errs)) + ")",
-            expanded=False,
-        ):
-            _sample = list(_fetch_errs.items())[:15]
-            for _tk, _msg in _sample:
-                st.caption("**" + _tk + "**: " + _msg)
-            if len(_fetch_errs) > len(_sample):
-                st.caption(
-                    "... a dalsich " + str(len(_fetch_errs) - len(_sample)) + "."
-                )
-
-    _stooq_errs = st.session_state.get("_stooq_errors", {})
-    if _stooq_errs:
-        with st.expander(
-            "Detail chyb pri nacitani zo Stooq (" + str(len(_stooq_errs)) + ")",
-            expanded=False,
-        ):
-            _sample2 = list(_stooq_errs.items())[:15]
-            for _tk, _msg in _sample2:
-                st.caption("**" + _tk + "**: " + _msg)
-            if len(_stooq_errs) > len(_sample2):
-                st.caption(
-                    "... a dalsich " + str(len(_stooq_errs) - len(_sample2)) + "."
-                )
+if _fsum.get("rate_limited"):
+    st.warning(
+        "Yahoo Finance momentalne rate-limituje poziadavky z tejto "
+        "siete (docasne blokovanie, bezne pri zdielanych IP na "
+        "Streamlit Cloud - nie chyba appky). Appka na pozadi dalej "
+        "skusa dotiahnut zvysne data. Zobrazuju sa posledne zname "
+        "hodnoty (viz datum vyssie), kde su k dispozicii. Detaily a "
+        "tlacidlo na manualnu aktualizaciu najdes v sekcii "
+        "'Sprava dat' nizsie."
+    )
 
 if not st.session_state.holdings:
     st.info("Zatial nemas pridane ziadne akcie. Pridaj prvu vyssie.")
