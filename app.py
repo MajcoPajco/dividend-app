@@ -753,7 +753,7 @@ def _fetch_stock_data_cached(ticker):
 
     try:
         hist_full = t.history(
-            period="6y", interval="1d", auto_adjust=False, actions=True)
+            period="max", interval="1d", auto_adjust=False, actions=True)
     except Exception:
         hist_full = None
 
@@ -778,6 +778,7 @@ def _fetch_stock_data_cached(ticker):
         "6m": _pct_change_over_period(close_hist, months=6),
         "1y": _pct_change_over_period(close_hist, years=1),
         "5y": _pct_change_over_period(close_hist, years=5),
+        "10y": _pct_change_over_period(close_hist, years=10),
     }
     # Male oneskorenie LEN pri realnom sietovom fetchi (nie pri zasahu
     # do cache) - znizuje riziko, ze sa pri velkom portfoliu narazi na
@@ -1611,7 +1612,8 @@ else:
                 "Aktualna cena": "N/A",
                 "Rast 1M [%]": "N/A", "Rast 3M [%]": "N/A",
                 "Rast 6M [%]": "N/A", "Rast 1R [%]": "N/A",
-                "Rast 5R [%]": "N/A", "Div.Rocne[%]": "N/A",
+                "Rast 5R [%]": "N/A", "Rast 10R [%]": "N/A",
+                "Div.Rocne[%]": "N/A",
                 "Mnozstvo": format_qty(float(qty)),
             })
         else:
@@ -1630,13 +1632,14 @@ else:
                 "Rast 6M [%]": format_growth(growth.get("6m")),
                 "Rast 1R [%]": format_growth(growth.get("1y")),
                 "Rast 5R [%]": format_growth(growth.get("5y")),
+                "Rast 10R [%]": format_growth(growth.get("10y")),
                 "Div.Rocne[%]": fmt_pct(pa),
                 "Mnozstvo": format_qty(float(qty)),
             })
 
     df_h = pd.DataFrame(rows_h)
     _gcols = ["Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]",
-               "Rast 1R [%]", "Rast 5R [%]"]
+               "Rast 1R [%]", "Rast 5R [%]", "Rast 10R [%]"]
 
     def _style_g(val):
         if not val or val == "N/A":
@@ -1673,6 +1676,7 @@ else:
             "Rast 6M [%]":   st.column_config.TextColumn(disabled=True),
             "Rast 1R [%]":   st.column_config.TextColumn(disabled=True),
             "Rast 5R [%]":   st.column_config.TextColumn(disabled=True),
+            "Rast 10R [%]":  st.column_config.TextColumn(disabled=True),
             "Div.Rocne[%]":  st.column_config.TextColumn(disabled=True),
             "Mnozstvo":      st.column_config.TextColumn(
                 disabled=True,
@@ -1755,7 +1759,7 @@ else:
         )
     else:
         div_rows.sort(key=lambda r: r["ex_date"])
-        div_rows = div_rows[:40]
+        div_rows = div_rows[:50]
         div_row_parts = []
         for r in div_rows:
             last_div_str = fmt_curr(r["last_div"], r["currency"], 4)
@@ -1805,6 +1809,7 @@ else:
                 "<td>" + growth_cell_html(g.get("6m")) + "</td>"
                 "<td>" + growth_cell_html(g.get("1y")) + "</td>"
                 "<td>" + growth_cell_html(g.get("5y")) + "</td>"
+                "<td>" + growth_cell_html(g.get("10y")) + "</td>"
                 "<td>" + last_div_str + "</td>"
                 "<td>" + annual_div_str + "</td>"
                 "<td>" + pct_last_str + "</td>"
@@ -1817,7 +1822,7 @@ else:
             "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
             "<th>Ex-Div Date</th><th>Status</th><th>Frekvencia</th>"
             "<th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th>"
-            "<th>Rast 1R</th><th>Rast 5R</th>"
+            "<th>Rast 1R</th><th>Rast 5R</th><th>Rast 10R</th>"
             "<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>"
             "<th>% k cene</th><th>Div Yield</th>"
             "<th>Ocak. vynos/akcia</th>"
