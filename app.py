@@ -1129,10 +1129,24 @@ def _run_fetch_pass(max_attempts, spinner_text=None):
             else st.spinner("Nacitavam data pre " + str(_n) + " akcii...")
         )
         with _spinner_ctx:
+            # CACHE_SCHEMA_FIELDS: kluce, ktore musi mat "growth" dict v
+            # ulozenom zazname, aby sa povazoval za "kompletny". Ked sa v
+            # buducnosti prida novy udaj (ako teraz "10y"), stare zaznamy
+            # v perzistentnej cache (ulozene pred touto zmenou) ho nemaju -
+            # bez tejto kontroly by appka takyto "zastaraly" zaznam
+            # povazovala za dostatocne cerstvy (podla veku) a nikdy by ho
+            # neobnovila, takze by novy stlpec navzdy zostal N/A pre
+            # akcie, ktore sa medzicasom nestihli prirodzene prenacitat.
+            _REQUIRED_GROWTH_FIELDS = ("1m", "3m", "6m", "1y", "5y", "10y")
             for _tkr in _order:
                 _entry = _cache.get(_tkr)
+                _has_complete_schema = _entry is not None and all(
+                    k in (_entry["rec"].get("growth") or {})
+                    for k in _REQUIRED_GROWTH_FIELDS
+                )
                 _is_fresh_enough = (
                     _entry is not None
+                    and _has_complete_schema
                     and (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE
                 )
                 if (not _is_fresh_enough and not _rate_limited_hit
