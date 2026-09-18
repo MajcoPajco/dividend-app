@@ -1004,6 +1004,48 @@ def make_usd_bar_chart(series, x_title, height=320, bar_color="#2f6fed"):
     )
 
 
+def make_two_tone_month_chart(df_plot, height=320):
+    """
+    Stlpcovy graf s mesiacmi na osi X, kde kazdy stlpec moze byt
+    zlozeny z dvoch casti: 'Vyplatene' (uz sa stalo, tmavomodra) a
+    'Odhad' (este sa nestalo, len projekcia, siva). df_plot ma stlpce
+    ['month', 'Stav', 'Suma (USD)'].
+    """
+    color_scale = alt.Scale(
+        domain=["Vyplatene", "Odhad"],
+        range=["#1e3a8a", "#9ca3af"],
+    )
+    return (
+        alt.Chart(df_plot)
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                "month:O", title="Mesiac", sort=None,
+                axis=alt.Axis(labelFontSize=14, titleFontSize=16,
+                               labelAngle=-60),
+            ),
+            y=alt.Y(
+                "Suma (USD):Q", title="Suma (USD)",
+                axis=alt.Axis(labelFontSize=14, titleFontSize=16,
+                               format="$,.2f"),
+            ),
+            color=alt.Color(
+                "Stav:N", scale=color_scale,
+                legend=alt.Legend(title=None, labelFontSize=13),
+            ),
+            order=alt.Order("Stav:N"),
+            tooltip=[
+                alt.Tooltip("month:O", title="Mesiac"),
+                alt.Tooltip("Stav:N", title="Stav"),
+                alt.Tooltip("Suma (USD):Q", title="Suma (USD)",
+                            format="$,.2f"),
+            ],
+        )
+        .properties(height=height)
+        .configure_axis(labelFontSize=14, titleFontSize=16)
+    )
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.markdown(
@@ -1814,7 +1856,6 @@ else:
                 "<tr>"
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>"
                 "<td>" + r["name"] + "</td>"
-                "<td>1 ks</td>"
                 "<td>" + r["ex_date"].strftime("%d/%m/%y") + "</td>"
                 "<td>" + status_html + "</td>"
                 "<td>" + freq_badge_html(r["frequency"]) + "</td>"
@@ -1833,7 +1874,7 @@ else:
             )
         st.markdown(
             "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
-            "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
+            "<th>Ticker</th><th>Meno</th>"
             "<th>Ex-Div Date</th><th>Status</th><th>Frekvencia</th>"
             "<th>Rast 1M</th><th>Rast 3M</th><th>Rast 6M</th>"
             "<th>Rast 1R</th><th>Rast 5R</th><th>Rast 10R</th>"
@@ -2050,18 +2091,18 @@ else:
             )
 
 # ============================================================
-# SEKCIA 7 – OCAKAVANE BUDUCE DIVIDENDOVE PRIJMY
+# SEKCIA 7 – OCAKAVANE DIVIDENDOVE PRIJMY (aktualny kalendarny rok)
 # ============================================================
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Ocakavane buduce dividendove prijmy")
 st.markdown(
-    "<div class=\"section-note\">Prvy termin pri kazdej akcii je "
-    "oficialne oznameny buduci ex-div datum (ak je dostupny) - teda uz "
-    "potvrdena udalost. Dalsie terminy su len ODHAD, dopocitany na "
-    "zaklade zistenej frekvencie vyplacania a poslednej znamej vysky "
-    "dividendy na akciu. Skutocna vyska aj datum buducich vyplat sa "
-    "mozu zmenit.</div>",
+    "<div class=\"section-note\">Cislo aj graf su za CELY AKTUALNY "
+    "KALENDARNY ROK: uz vyplatene dividendy (tmavomodra farba v grafe, "
+    "podla oficialnej historie) + odhad zvysku roka (siva farba, "
+    "dopocitany na zaklade zistenej frekvencie vyplacania a poslednej "
+    "znamej vysky dividendy na akciu). Skutocna vyska aj datum "
+    "buducich vyplat sa mozu zmenit.</div>",
     unsafe_allow_html=True,
 )
 
@@ -2069,14 +2110,44 @@ if not st.session_state.holdings:
     st.info("Pridaj akcie vyssie, aby sa tu zobrazila projekcia dividend.")
 else:
     today_f = datetime.now(timezone.utc).date()
-    horizon_f = (pd.Timestamp(today_f) + pd.DateOffset(months=12)).date()
+    current_year_f = today_f.year
+    year_end_f = date(current_year_f, 12, 31)
 
     proj_rows = []
+
+    # 1) UZ VYPLATENE v tomto kalendarnom roku (z oficialnej historie)
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
         if rec is None:
             continue
-        events = project_future_dividend_dates(rec, today_f, horizon_f)
+        divs = rec.get("dividends_history")
+        if divs is None or len(divs) == 0:
+            continue
+        currency = rec["currency"]
+        fx = get_fx_to_usd_rate(currency) or 1.0
+        qty_f = float(qty)
+        for ts, amount in divs.items():
+            d = ts.date()
+            if d.year != current_year_f or d > today_f:
+                continue
+            amount = float(amount)
+            if amount <= 0:
+                continue
+            proj_rows.append({
+                "date": d, "ticker": tkr, "name": rec["name"],
+                "qty": qty_f, "amount_per_share": amount,
+                "currency": currency,
+                "amount_local": amount * qty_f,
+                "amount_usd": amount * qty_f * fx,
+                "status": "Vyplatene",
+            })
+
+    # 2) ODHAD zvysku tohto kalendarneho roka (este nevyplatene)
+    for tkr, qty in st.session_state.holdings.items():
+        rec = stock_records.get(tkr)
+        if rec is None:
+            continue
+        events = project_future_dividend_dates(rec, today_f, year_end_f)
         if not events:
             continue
         currency = rec["currency"]
@@ -2084,37 +2155,69 @@ else:
         last_div = rec.get("last_div_amount") or 0.0
         qty_f = float(qty)
         for ev in events:
+            if ev["date"] <= today_f:
+                continue  # uz by malo byt v historii, nepocitaj dvakrat
             proj_rows.append({
                 "date": ev["date"], "ticker": tkr, "name": rec["name"],
                 "qty": qty_f, "amount_per_share": last_div,
                 "currency": currency,
                 "amount_local": last_div * qty_f,
                 "amount_usd": last_div * qty_f * fx,
-                "confirmed": ev["confirmed"],
+                "status": "Odhad",
             })
 
     if not proj_rows:
         st.info(
             "Pre drzane akcie nie su dostupne data na projekciu "
-            "buducich dividend."
+            "dividend pre rok " + str(current_year_f) + "."
         )
     else:
         df_proj = pd.DataFrame(proj_rows)
         df_proj["month"] = df_proj["date"].apply(lambda d: d.strftime("%Y-%m"))
-        monthly_proj = df_proj.groupby("month")["amount_usd"].sum().sort_index()
         total_proj = df_proj["amount_usd"].sum()
+        total_paid = df_proj.loc[
+            df_proj["status"] == "Vyplatene", "amount_usd"
+        ].sum()
+        total_est = df_proj.loc[
+            df_proj["status"] == "Odhad", "amount_usd"
+        ].sum()
+
+        # Vsetkych 12 mesiacov na osi, aj ked su niektore nulove
+        all_months = [
+            date(current_year_f, m, 1).strftime("%Y-%m") for m in range(1, 13)
+        ]
+        monthly = (
+            df_proj.groupby(["month", "status"])["amount_usd"]
+            .sum().reset_index()
+        )
+        _full_idx = pd.MultiIndex.from_product(
+            [all_months, ["Vyplatene", "Odhad"]], names=["month", "status"]
+        )
+        monthly = (
+            monthly.set_index(["month", "status"])
+            .reindex(_full_idx, fill_value=0.0)
+            .reset_index()
+        )
+        monthly.columns = ["month", "Stav", "Suma (USD)"]
 
         colF1, colF2 = st.columns([1, 3])
         with colF1:
-            st.metric("Ocakavane za 12 mesiacov", fmt_curr(total_proj, "USD", 2))
+            st.metric(
+                "Ocakavane za rok " + str(current_year_f),
+                fmt_curr(total_proj, "USD", 2),
+            )
+            st.caption(
+                "Z toho uz vyplatene: " + fmt_curr(total_paid, "USD", 2)
+                + " · odhad zvysku roka: " + fmt_curr(total_est, "USD", 2)
+            )
         with colF2:
             st.markdown(
-                "<div class=\"chart-label\">Ocakavany mesacny prijem z "
-                "dividend (USD)</div>",
+                "<div class=\"chart-label\">Mesacny prijem z dividend v "
+                "roku " + str(current_year_f) + " (USD)</div>",
                 unsafe_allow_html=True,
             )
             st.altair_chart(
-                make_usd_bar_chart(monthly_proj, "month"),
+                make_two_tone_month_chart(monthly),
                 use_container_width=True,
             )
 
@@ -2124,8 +2227,8 @@ else:
             amt_usd_str = fmt_curr(r["amount_usd"], "USD", 2)
             amt_local_str = fmt_curr(r["amount_local"], r["currency"], 2)
             status_html = (
-                "<span class=\"freq-badge freq-monthly\">Potvrdene</span>"
-                if r["confirmed"] else
+                "<span class=\"freq-badge freq-monthly\">Vyplatene</span>"
+                if r["status"] == "Vyplatene" else
                 "<span class=\"freq-badge freq-quarterly\">Odhad</span>"
             )
             proj_row_parts.append(
@@ -2139,7 +2242,10 @@ else:
                 "<td>" + amt_usd_str + "</td>"
                 "</tr>"
             )
-        with st.expander("Detailny prehlad ocakavanych vyplat", expanded=False):
+        with st.expander(
+            "Detailny prehlad za rok " + str(current_year_f),
+            expanded=False,
+        ):
             st.markdown(
                 "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
                 "<th>Ticker</th><th>Meno</th><th>Datum</th><th>Status</th>"
@@ -2149,3 +2255,4 @@ else:
                 + "</tbody></table></div>",
                 unsafe_allow_html=True,
             )
+
