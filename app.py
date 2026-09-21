@@ -1013,7 +1013,7 @@ def make_two_tone_month_chart(df_plot, height=320):
     """
     color_scale = alt.Scale(
         domain=["Vyplatene", "Odhad"],
-        range=["#1e3a8a", "#9ca3af"],
+        range=["#2f6fed", "#9ca3af"],
     )
     return (
         alt.Chart(df_plot)
@@ -2203,12 +2203,16 @@ else:
         colF1, colF2 = st.columns([1, 3])
         with colF1:
             st.metric(
-                "Ocakavane za rok " + str(current_year_f),
-                fmt_curr(total_proj, "USD", 2),
+                "Uz vyplatene (" + str(current_year_f) + ")",
+                fmt_curr(total_paid, "USD", 2),
             )
-            st.caption(
-                "Z toho uz vyplatene: " + fmt_curr(total_paid, "USD", 2)
-                + " · odhad zvysku roka: " + fmt_curr(total_est, "USD", 2)
+            st.metric(
+                "Este ocakavane",
+                fmt_curr(total_est, "USD", 2),
+            )
+            st.metric(
+                "Spolu za rok " + str(current_year_f),
+                fmt_curr(total_proj, "USD", 2),
             )
         with colF2:
             st.markdown(
