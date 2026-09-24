@@ -644,6 +644,42 @@ def estimate_dividend_frequency(dividends):
     return "Nepravidelne"
 
 
+_PAYMENTS_PER_YEAR = {
+    "Mesacne": 12, "Stvrtrocne": 4, "Polrocne": 2, "Rocne": 1,
+}
+
+
+def _payments_per_year(frequency):
+    return _PAYMENTS_PER_YEAR.get(frequency, 1)
+
+
+def _expected_amounts_cycle(dividends, frequency, n_events):
+    """
+    Vrati zoznam ocakavanych súm pre n_events nadchadzajucich vyplat.
+
+    KLUCOVA OPRAVA: mnohe firmy (najma UK - interim/final dividenda)
+    vyplacaju v ramci roka RÔZNE sumy, nie rovnaku sumu opakovane
+    (napr. Persimmon: interim ~20p, final ~40p). Pouzit "poslednu
+    vyplatenu sumu" ako odhad DALSEJ vyplaty je v takom pripade
+    nespravne - ak posledna vyplatena bola "final" (40p), dalsia bude
+    "interim" (typicky ina suma, ~20p), nie znova 40p.
+
+    Namiesto toho sa pouzije CYKLUS poslednych N skutocne vyplatenych
+    súm (N = pocet vyplat za rok podla frekvencie), kde dalsia
+    ocakavana suma zodpoveda tej, ktora bola vyplatena v ROVNAKEJ FAZE
+    cyklu pred N vyplatami (typicky pred rokom) - a pokracuje sa v tomto
+    opakujucom sa vzore pre dalsie nadchadzajuce udalosti.
+    """
+    if dividends is None or len(dividends) == 0:
+        return []
+    n = _payments_per_year(frequency)
+    if n <= 1 or len(dividends) < n:
+        last_val = float(dividends.iloc[-1])
+        return [last_val] * n_events
+    last_n = [float(v) for v in dividends.iloc[-n:]]
+    return [last_n[i % n] for i in range(n_events)]
+
+
 _FREQ_BADGE_CLASS = {
     "Stvrtrocne": "freq-quarterly",
     "Mesacne": "freq-monthly",
@@ -685,6 +721,10 @@ def _parse_stock_info(ticker, info, dividends):
     frequency = estimate_dividend_frequency(dividends)
     last_div_amount = float(dividends.iloc[-1]) \
         if (dividends is not None and len(dividends) > 0) else None
+    _expected_cycle = _expected_amounts_cycle(dividends, frequency, 1)
+    next_expected_amount = (
+        _expected_cycle[0] if _expected_cycle else last_div_amount
+    )
     ex_div_date = None
     ex_div_ts = info.get("exDividendDate")
     if ex_div_ts:
@@ -720,6 +760,7 @@ def _parse_stock_info(ticker, info, dividends):
         "price": float(price), "exchange": exchange_name,
         "exchange_code": exchange_code, "country": country,
         "last_div_amount": last_div_amount,
+        "next_expected_amount": next_expected_amount,
         "ex_div_date": ex_div_date, "pay_div_date": pay_div_date,
         "annual_rate": annual_rate,
         "dividend_yield_pct": dividend_yield_pct,
@@ -1182,9 +1223,12 @@ def _run_fetch_pass(max_attempts, spinner_text=None):
             _REQUIRED_GROWTH_FIELDS = ("1m", "3m", "6m", "1y", "5y", "10y")
             for _tkr in _order:
                 _entry = _cache.get(_tkr)
-                _has_complete_schema = _entry is not None and all(
-                    k in (_entry["rec"].get("growth") or {})
-                    for k in _REQUIRED_GROWTH_FIELDS
+                _has_complete_schema = _entry is not None and (
+                    all(
+                        k in (_entry["rec"].get("growth") or {})
+                        for k in _REQUIRED_GROWTH_FIELDS
+                    )
+                    and "next_expected_amount" in _entry["rec"]
                 )
                 _is_fresh_enough = (
                     _entry is not None
@@ -1790,7 +1834,15 @@ else:
         if rec is None or ev is None:
             continue
         price = rec["price"]
-        last_div = rec["last_div_amount"]
+        # KLUCOVA OPRAVA: pre "najblizsi Ex-Div termin" pouzivame ODHAD
+        # DALSEJ vyplaty (next_expected_amount), NIE poslednu vyplatenu
+        # sumu (last_div_amount) - pre firmy s nerovnakymi interim/final
+        # dividendami (bezne napr. v UK) by inak toto cislo bolo
+        # systematicky nespravne (napr. by ukazalo sumu financej
+        # dividendy ako odhad pre nadchadzajucu interim dividendu).
+        last_div = rec.get("next_expected_amount")
+        if last_div is None:
+            last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
         currency = rec["currency"]
         pct_last = (last_div / price * 100
@@ -1922,7 +1974,9 @@ else:
             pay_date = ev["date"] + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE)
             confirmed_pay = False
         price = rec["price"]
-        last_div = rec["last_div_amount"]
+        last_div = rec.get("next_expected_amount")
+        if last_div is None:
+            last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
         currency = rec["currency"]
         pct_annual = rec.get("dividend_yield_pct")
@@ -2152,17 +2206,28 @@ else:
             continue
         currency = rec["currency"]
         fx = get_fx_to_usd_rate(currency) or 1.0
-        last_div = rec.get("last_div_amount") or 0.0
         qty_f = float(qty)
-        for ev in events:
+        # KLUCOVA OPRAVA: pri viacerych buducich udalostiach v tom istom
+        # roku (napr. polrocny platca so zvysnou interim AJ final
+        # dividendou do konca roka) NEPOUZIVAME rovnaku "poslednu
+        # vyplatenu sumu" pre obe - pouzijeme cyklus poslednych N
+        # skutocnych vyplat (N = vyplat za rok), co spravne strieda
+        # napr. interim/final sumy namiesto opakovania tej istej.
+        _amounts = _expected_amounts_cycle(
+            rec.get("dividends_history"), rec.get("frequency"), len(events)
+        )
+        if not _amounts:
+            _fallback = rec.get("next_expected_amount") or rec.get("last_div_amount") or 0.0
+            _amounts = [_fallback] * len(events)
+        for ev, amt in zip(events, _amounts):
             if ev["date"] <= today_f:
                 continue  # uz by malo byt v historii, nepocitaj dvakrat
             proj_rows.append({
                 "date": ev["date"], "ticker": tkr, "name": rec["name"],
-                "qty": qty_f, "amount_per_share": last_div,
+                "qty": qty_f, "amount_per_share": amt,
                 "currency": currency,
-                "amount_local": last_div * qty_f,
-                "amount_usd": last_div * qty_f * fx,
+                "amount_local": amt * qty_f,
+                "amount_usd": amt * qty_f * fx,
                 "status": "Odhad",
             })
 
