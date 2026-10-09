@@ -1888,16 +1888,6 @@ else:
                                            + fmt_num(r["annual_rate"] * ra, 2) + ")")
             else:
                 annual_div_str = "N/A"
-            if r["expected"] is not None:
-                curr = r["currency"]
-                expected_str = fmt_curr(r["expected"], curr, 4)
-                if curr.upper() != "USD":
-                    re2 = get_fx_to_usd_rate(curr)
-                    if re2:
-                        expected_str += (" (~ USD "
-                                         + fmt_num(r["expected"] * re2, 4) + ")")
-            else:
-                expected_str = "N/A"
             g = r.get("growth") or {}
             status_html = (
                 "<span class=\"freq-badge freq-monthly\">Potvrdene</span>"
@@ -1921,7 +1911,6 @@ else:
                 "<td>" + annual_div_str + "</td>"
                 "<td>" + pct_last_str + "</td>"
                 "<td>" + pct_annual_str + "</td>"
-                "<td>" + expected_str + "</td>"
                 "</tr>"
             )
         st.markdown(
@@ -1932,7 +1921,6 @@ else:
             "<th>Rast 1R</th><th>Rast 5R</th><th>Rast 10R</th>"
             "<th>Dividenda/akcia</th><th>Rocna divi./akcia</th>"
             "<th>% k cene</th><th>Div Yield</th>"
-            "<th>Ocak. vynos/akcia</th>"
             "</tr></thead><tbody>"
             + "".join(div_row_parts)
             + "</tbody></table></div>",
