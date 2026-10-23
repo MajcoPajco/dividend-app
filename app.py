@@ -296,6 +296,157 @@ HOLDINGS_FILE = Path(__file__).resolve().parent / "holdings_data.json"
 STOCK_CACHE_FILE = Path(__file__).resolve().parent / "stock_data_cache.json"
 GSHEET_HEADER = ["Ticker", "Qty", "Exchange"]
 
+# ── Zalozne stlpce v Google Sheets (posledne stiahnute data o akciach) ────────
+#
+# KLUCOVA VLASTNOST (trvala zaloha nezavisla od appky): doteraz sa
+# uspesne stiahnute data o akciach ukladali LEN do lokalneho JSON
+# suboru (STOCK_CACHE_FILE) - ten ale na efemernom uloziskach (napr.
+# Streamlit Community Cloud po restarte/redeploy appky) nemusi prezit,
+# takze appka po takomto restarte zacinala so vsetkymi akciami na N/A,
+# kym sa znova nestihli stiahnut. Aby appka NIKDY nezacinala uplne od
+# nuly, ukladaju sa posledne zname udaje o kazdej drzanej akcii AJ do
+# samotneho Google Sheetu (do tych istych riadkov, kde su Ticker/Qty/
+# Exchange, len v dalsich stlpcoch) - Google Sheets je na rozdiel od
+# lokalneho disku trvaly a nezavisly od behu/restartu appky.
+#
+# BACKUP_COLUMNS urcuje poradie tychto dalsich stlpcov (D a dalej).
+# DivHistoryJSON obsahuje poslednych DIV_HISTORY_CAP vyplat ako kompaktny
+# JSON zoznam [[datum, suma], ...] - staci na frekvenciu/projekciu, ale
+# nezatazuje bunku v Sheete neobmedzenou historiou.
+BACKUP_COLUMNS = [
+    "Price", "Currency", "Name", "Country", "ExchangeCode",
+    "LastDivAmount", "NextExpectedAmount", "AnnualRate", "DividendYieldPct",
+    "ExDivDate", "PayDivDate", "Frequency",
+    "Growth1M", "Growth3M", "Growth6M", "Growth1Y", "Growth5Y", "Growth10Y",
+    "UpdatedAt", "Source", "DivHistoryJSON",
+]
+FULL_SHEET_HEADER = GSHEET_HEADER + BACKUP_COLUMNS
+DIV_HISTORY_CAP = 60
+
+
+def _sheet_cell(v):
+    """Hodnotu pripravi na zapis do Google Sheets bunky - None/NaN sa
+    zapisu ako prazdny retazec (gspread/Sheets API neakceptuje None)."""
+    if v is None:
+        return ""
+    if isinstance(v, float) and pd.isna(v):
+        return ""
+    return v
+
+
+def _div_history_to_json(divs):
+    """Zakoduje poslednych DIV_HISTORY_CAP vyplatenych dividend ako
+    kompaktny JSON zoznam [[datum_iso, suma], ...] pre ulozenie do
+    jednej bunky Google Sheets."""
+    if divs is None or len(divs) == 0:
+        return ""
+    try:
+        tail = divs.iloc[-DIV_HISTORY_CAP:]
+        data = [
+            [str(pd.Timestamp(idx).date()), float(val)]
+            for idx, val in tail.items()
+        ]
+        return json.dumps(data, separators=(",", ":"))
+    except Exception:
+        return ""
+
+
+def _div_history_from_json(raw):
+    if not raw:
+        return pd.Series(dtype=float)
+    try:
+        data = json.loads(raw)
+        idx = pd.DatetimeIndex([d for d, _ in data])
+        vals = [float(v) for _, v in data]
+        return pd.Series(vals, index=idx)
+    except Exception:
+        return pd.Series(dtype=float)
+
+
+def _merge_caches(a, b):
+    """
+    Zluci dve cache akcii (ticker -> {'rec':.., 'ts':.., 'source':..}).
+    Pre kazdy ticker ponecha zaznam s NOVSIM timestampom ('ts') - poradie
+    argumentov a/b preto nerozhoduje o vysledku, len to, ktory zaznam je
+    skutocne cerstvejsi. Pouziva sa na kombinovanie lokalnej diskovej
+    cache so zalohou ulozenou v Google Sheets.
+    """
+    merged = dict(a)
+    for tkr, entry in b.items():
+        other = merged.get(tkr)
+        if other is None or entry["ts"] > other["ts"]:
+            merged[tkr] = entry
+    return merged
+
+
+def _backup_row_for_ticker(tkr, cache):
+    """
+    Vrati zoznam hodnot (presne v poradi BACKUP_COLUMNS) pre dany ticker,
+    zostaveny z aktualnej in-memory cache (st.session_state['_stock_cache']).
+    Ak pre ticker este nie su ziadne stiahnute data, vrati prazdne hodnoty
+    (ticker tak v Sheete existuje len so stlpcami Ticker/Qty/Exchange,
+    kym sa po prvykrat uspesne nestiahnu jeho data).
+    """
+    entry = cache.get(tkr)
+    if entry is None:
+        return [""] * len(BACKUP_COLUMNS)
+    rec = entry.get("rec") or {}
+    g = rec.get("growth") or {}
+    ex_d = rec.get("ex_div_date")
+    pay_d = rec.get("pay_div_date")
+    ts = entry.get("ts")
+    return [
+        _sheet_cell(rec.get("price")),
+        _sheet_cell(rec.get("currency")),
+        _sheet_cell(rec.get("name")),
+        _sheet_cell(rec.get("country")),
+        _sheet_cell(rec.get("exchange_code")),
+        _sheet_cell(rec.get("last_div_amount")),
+        _sheet_cell(rec.get("next_expected_amount")),
+        _sheet_cell(rec.get("annual_rate")),
+        _sheet_cell(rec.get("dividend_yield_pct")),
+        ex_d.isoformat() if ex_d else "",
+        pay_d.isoformat() if pay_d else "",
+        _sheet_cell(rec.get("frequency")),
+        _sheet_cell(g.get("1m")),
+        _sheet_cell(g.get("3m")),
+        _sheet_cell(g.get("6m")),
+        _sheet_cell(g.get("1y")),
+        _sheet_cell(g.get("5y")),
+        _sheet_cell(g.get("10y")),
+        ts.astimezone(timezone.utc).isoformat() if isinstance(ts, datetime) else "",
+        _sheet_cell(entry.get("source")),
+        _div_history_to_json(rec.get("dividends_history")),
+    ]
+
+
+def _build_sheet_rows(holdings, exchanges, cache):
+    """Zostavi cely obsah Google Sheets listu (hlavicka + jeden riadok
+    na kazdu drzanu akciu, vratane zalohovych stlpcov z cache)."""
+    rows = [FULL_SHEET_HEADER]
+    for tkr, qty in holdings.items():
+        row = (
+            [tkr, float(qty), exchanges.get(tkr, "")]
+            + _backup_row_for_ticker(tkr, cache)
+        )
+        rows.append(row)
+    return rows
+
+
+def _write_full_sheet(ws, holdings, exchanges, cache, clear=True):
+    """
+    Zapise holdings + zalohove stlpce do Google Sheets.
+    clear=True (pouziva save_holdings pri zmene poctu drzanych akcii) -
+    najprv vymaze cely list, aby neostali "duchovia" po odobratej akcii.
+    clear=False (pouziva periodicky/manualny zapis zalohy, kde sa pocet
+    riadkov nemeni - tu uz zmenu poctu riesi save_holdings) - vynecha
+    vymazanie, aby sa znizilo riziko straty dat pri prerusenom zapise.
+    """
+    rows = _build_sheet_rows(holdings, exchanges, cache)
+    if clear:
+        ws.clear()
+    ws.update(rows, value_input_option="RAW")
+
 
 def _find_or_create_holdings_ws(sh):
     """
@@ -383,10 +534,10 @@ def _connect_gsheet():
                       "detail": "Chyba: " + type(e).__name__ + ": " + str(e)}
 
 
-def _read_holdings_rows(ws):
+def _read_holdings_rows(all_vals):
     """
-    Cita riadky z listu POZICNE (stlpec A=Ticker, B=Qty, C=Exchange),
-    nezavisle od toho, ci ma list hlavicku alebo nie.
+    Cita riadky POZICNE (stlpec A=Ticker, B=Qty, C=Exchange), nezavisle
+    od toho, ci ma list hlavicku alebo nie.
 
     KLUCOVA OPRAVA: povodny kod pouzival ws.get_all_records(), ktory
     VZDY berie 1. riadok ako hlavicku so stlpcami "Ticker"/"Qty"/
@@ -397,12 +548,15 @@ def _read_holdings_rows(ws):
     VSETKY riadky sa potom ticho zahodia, lebo ziadny stlpec sa
     nevola "Ticker".
 
-    Tu citame vzdy surove hodnoty (get_all_values), zisti sa, ci prvy
-    riadok vyzera ako hlavicka (obsahuje bunku "ticker", case-insens.)
-    - ak ano, preskoci sa; ak nie, berie sa ako data. Hodnoty sa citaju
-    ako stringy, takze SK format "2,1" sa spracuje cez parse_qty_input.
+    Zisti sa, ci prvy riadok vyzera ako hlavicka (obsahuje bunku
+    "ticker", case-insens.) - ak ano, preskoci sa; ak nie, berie sa ako
+    data. Hodnoty sa citaju ako stringy, takze SK format "2,1" sa
+    spracuje cez parse_qty_input.
+
+    Berie uz vopred nacitane 'all_vals' (ws.get_all_values()) namiesto
+    toho, aby si ich citalo samo - takze sa da pouzit spolu s
+    _read_backup_rows na tom istom jedinom sietovom citani listu.
     """
-    all_vals = ws.get_all_values()
     if not all_vals:
         return []
     first_row = [str(c).strip().lower() for c in all_vals[0]]
@@ -417,12 +571,114 @@ def _read_holdings_rows(ws):
     return records
 
 
-def load_holdings():
+def _read_backup_rows(all_vals):
+    """
+    Precita zalozne stlpce (cena, dividendy, rast...) ulozene v Google
+    Sheets vedla kazdeho tickera (stlpce od D dalej, poradie podla
+    BACKUP_COLUMNS). Pouziva sa na obnovenie POSLEDNYCH ZNAMYCH dat po
+    restarte appky (napr. redeploy na Streamlit Cloud), ked lokalny
+    diskovy cache subor (ktory efemerne uloziska nemusia prezit) je
+    prazdny alebo chyba - takze appka nikdy nezacina s N/A vsade, ale
+    rovno zobrazi posledne stiahnute udaje aj s datumom aktualizacie.
+
+    Ak list este nema zalozne stlpce vyplnene (stary format / este sa
+    nikdy nezapisala zaloha), tieto riadky jednoducho nemaju "UpdatedAt"
+    a preskocia sa - vrati sa prazdny dict, bez chyby.
+    """
+    if not all_vals:
+        return {}
+    first_row = [str(c).strip().lower() for c in all_vals[0]]
+    has_header = "ticker" in first_row
+    data_rows = all_vals[1:] if has_header else all_vals
+    n_tail = len(BACKUP_COLUMNS)
+    cache = {}
+
+    def _f(vals, key):
+        v = vals.get(key)
+        if v in (None, ""):
+            return None
+        try:
+            return float(str(v).replace(",", "."))
+        except Exception:
+            return None
+
+    def _d(vals, key):
+        v = vals.get(key)
+        if not v:
+            return None
+        try:
+            return date.fromisoformat(str(v))
+        except Exception:
+            return None
+
+    for row in data_rows:
+        if not any(str(c).strip() for c in row):
+            continue
+        row = list(row) + [""] * (3 + n_tail)
+        tkr = str(row[0]).strip().upper()
+        if not tkr or tkr in ("TICKER", "SYMBOL"):
+            continue
+        exchange_name = str(row[2]).strip()
+        vals = dict(zip(BACKUP_COLUMNS, row[3:3 + n_tail]))
+        ts_raw = vals.get("UpdatedAt")
+        if not ts_raw:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        price = _f(vals, "Price")
+        if price is None:
+            continue
+        rec = {
+            "ticker": tkr,
+            "name": vals.get("Name") or tkr,
+            "currency": vals.get("Currency") or "",
+            "price": price,
+            "exchange": exchange_name or "N/A",
+            "exchange_code": vals.get("ExchangeCode") or "",
+            "country": vals.get("Country") or "N/A",
+            "last_div_amount": _f(vals, "LastDivAmount"),
+            "next_expected_amount": _f(vals, "NextExpectedAmount"),
+            "ex_div_date": _d(vals, "ExDivDate"),
+            "pay_div_date": _d(vals, "PayDivDate"),
+            "annual_rate": _f(vals, "AnnualRate"),
+            "dividend_yield_pct": _f(vals, "DividendYieldPct"),
+            "frequency": vals.get("Frequency") or "N/A",
+            "dividends_history": _div_history_from_json(vals.get("DivHistoryJSON")),
+            "growth": {
+                "1m": _f(vals, "Growth1M"), "3m": _f(vals, "Growth3M"),
+                "6m": _f(vals, "Growth6M"), "1y": _f(vals, "Growth1Y"),
+                "5y": _f(vals, "Growth5Y"), "10y": _f(vals, "Growth10Y"),
+            },
+        }
+        cache[tkr] = {
+            "rec": rec, "ts": ts,
+            "source": vals.get("Source") or "sheet-backup",
+        }
+    return cache
+
+
+def load_holdings_and_backup():
+    """
+    Nacita z Google Sheets JEDNYM citanim (ws.get_all_values()) jednak
+    drzane pozicie (Ticker/Qty/Exchange, presne ako doteraz funkcia
+    load_holdings), jednak zalozne data o akciach ulozene v dalsich
+    stlpcoch (pozri _read_backup_rows). Vrati dvojicu
+    (holdings, backup_cache).
+
+    Pri nedostupnosti GSheets sa holdings nacitaju z lokalneho JSON
+    suboru ako doteraz (backup_cache je vtedy prazdna - zaloha v
+    Sheets proste nie je k dispozicii).
+    """
     ws, status = _connect_gsheet()
     st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
-            records = _read_holdings_rows(ws)
+            all_vals = ws.get_all_values()
+            records = _read_holdings_rows(all_vals)
             result = {}
             for r in records:
                 # Case-insensitive pristup k stlpcom - ak ma hlavicka
@@ -450,38 +706,44 @@ def load_holdings():
                     "qty": qty,
                     "exchange": r_norm.get("exchange", ""),
                 }
-            return result
+            backup_cache = _read_backup_rows(all_vals)
+            return result, backup_cache
         except Exception as e:
             st.session_state["gsheet_status"] = {
                 "ok": False,
                 "detail": "Chyba citania GSheets: " + str(e),
             }
     if not HOLDINGS_FILE.exists():
-        return {}
+        return {}, {}
     try:
         with open(HOLDINGS_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        return raw if isinstance(raw, dict) else {}
+        return (raw if isinstance(raw, dict) else {}), {}
     except Exception:
-        return {}
+        return {}, {}
 
 
 def save_holdings(holdings, exchanges):
     """
-    Ulozi holdings.
+    Ulozi holdings do Google Sheets.
     value_input_option='RAW' = GSheets ulozi Python float presne tak
     ako je (2.1), bez localnej interpretacie desatinneho oddelovaca.
+
+    KLUCOVA VLASTNOST: pri kazdom ulozeni (pridanie/odobratie akcie) sa
+    popri Ticker/Qty/Exchange znova zapisu AJ zalozne stlpce (z aktualnej
+    cache st.session_state['_stock_cache']) pre VSETKY aktualne drzane
+    akcie - inak by pridanie/odobratie jednej akcie (ws.clear() + zapis
+    len 3 stlpcov) vymazalo ulozenu zalohu vsetkych ostatnych akcii.
     """
     ws, status = _connect_gsheet()
     st.session_state["gsheet_status"] = status
     if ws is not None:
         try:
-            rows = [GSHEET_HEADER] + [
-                [tkr, float(qty), exchanges.get(tkr, "")]
-                for tkr, qty in holdings.items()
-            ]
-            ws.clear()
-            ws.update(rows, value_input_option="RAW")
+            _write_full_sheet(
+                ws, holdings, exchanges,
+                st.session_state.get("_stock_cache", {}),
+                clear=True,
+            )
             n = str(len(holdings))
             t = datetime.now().strftime("%H:%M:%S")
             st.session_state["gsheet_last_write"] = {
@@ -837,6 +1099,77 @@ def fetch_stock_data(ticker):
         return None
 
 
+# ── Zalozny zdroj dat pri vypadku Yahoo Finance (Twelve Data) ─────────────────
+#
+# KLUCOVA VLASTNOST: Yahoo Finance obcas (najma na zdielanych IP ako
+# Streamlit Cloud) blokuje poziadavky na dlhsi cas (aj hodiny). Volne
+# dostupny zdroj BEZ registracie, ktory by vedel nahradit Yahoo 1:1
+# (vratane dividend), realne neexistuje - predtym vyskusany Stooq CSV
+# export vyzaduje JavaScript a nedal sa stiahnut priamo. Twelve Data
+# ponuka bezplatny API kluc (bez karty) s primeranym limitom (800
+# poziadaviek/den, 8/min), ale dividendova historia je na bezplatnom
+# plane LEN platena (fundamentals/dividends endpoint). Preto sa Twelve
+# Data pouziva LEN ako zalozny zdroj AKTUALNEJ CENY - ked Yahoo
+# zablokuje dalsie sťahovanie v danom behu, aspon cena (a z nej
+# odvodene % hodnoty) sa obnovi, kym dividendove udaje ostanu na
+# poslednej znamej hodnote (co je v poriadku - tie sa menia len
+# niekolkokrat do roka, nie je kriticke mat ich "live").
+#
+# Aktivuje sa len ak je v st.secrets nastaveny kluc 'twelvedata_api_key'
+# (bezplatna registracia na twelvedata.com). Bez neho appka funguje
+# presne ako doteraz (len Yahoo + perzistentna cache).
+
+try:
+    TWELVEDATA_API_KEY = str(st.secrets.get("twelvedata_api_key", "") or "").strip()
+except Exception:
+    TWELVEDATA_API_KEY = ""
+TWELVEDATA_ENABLED = bool(TWELVEDATA_API_KEY)
+TWELVEDATA_AUTO_MAX_PER_RUN = 8     # automaticky beh - nech appka necaka dlho
+TWELVEDATA_MANUAL_MAX_PER_RUN = 30  # manualne tlacidlo - pouzivatel caka zamerne
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_price_twelvedata_cached(ticker):
+    if not TWELVEDATA_ENABLED:
+        raise _LookupMiss("Twelve Data API kluc nie je nastaveny")
+    resp = requests.get(
+        "https://api.twelvedata.com/quote",
+        params={"symbol": ticker, "apikey": TWELVEDATA_API_KEY},
+        timeout=10,
+    )
+    # Throttling na bezplatny limit Twelve Data (8 poziadaviek/min) -
+    # aplikuje sa na kazdy REALNY sietovy pokus (uspesny aj neuspesny),
+    # aby sa pri sekvencii viacerych tickerov limit nikdy neprekrocil.
+    time.sleep(8)
+    try:
+        data = resp.json()
+    except Exception:
+        raise _LookupMiss("Twelve Data: neplatna odpoved pre " + ticker)
+    if not isinstance(data, dict) or "close" not in data:
+        _msg = ""
+        if isinstance(data, dict):
+            _msg = str(data.get("message") or data.get("code") or data)
+        raise _LookupMiss(
+            "Twelve Data: ziadna cena pre " + ticker
+            + ((" (" + _msg + ")") if _msg else "")
+        )
+    price = float(data["close"])
+    return {
+        "price": price,
+        "currency": (data.get("currency") or "").strip(),
+        "name": (data.get("name") or ticker).strip(),
+    }
+
+
+def fetch_price_fallback_twelvedata(ticker):
+    try:
+        return _fetch_price_twelvedata_cached(ticker)
+    except Exception as e:
+        errs = st.session_state.setdefault("_fetch_errors_fallback", {})
+        errs[ticker] = type(e).__name__ + ": " + str(e)[:200]
+        return None
+
+
 # ── Perzistentna cache stiahnutych dat (prezije reload/novu session) ───────
 #
 # KLUCOVA VLASTNOST: predtym sa uspesne stiahnute data akcii uchovavali
@@ -1136,13 +1469,22 @@ st.markdown(
 # ── Session state ─────────────────────────────────────────────────────────────
 
 if "holdings" not in st.session_state:
-    _loaded = load_holdings()
+    _loaded, _sheet_backup_initial = load_holdings_and_backup()
     st.session_state.holdings = {
         tkr: rec.get("qty", 0) for tkr, rec in _loaded.items()
     }
     st.session_state.holdings_exchange = {
         tkr: rec.get("exchange", "") for tkr, rec in _loaded.items()
     }
+    # KLUCOVA VLASTNOST: hned pri starte (aj po uplnom restarte appky,
+    # ked lokalny diskovy cache subor neprezil) sa _stock_cache naplni
+    # zalohou z Google Sheets, takze appka nikdy nezacina s N/A vsade.
+    st.session_state["_stock_cache"] = _merge_caches(
+        _load_stock_cache_from_disk(), _sheet_backup_initial
+    )
+    st.session_state["_sheet_backup_last_write_ts"] = max(
+        (e["ts"] for e in _sheet_backup_initial.values()), default=None
+    )
 
 if "holdings_exchange" not in st.session_state:
     st.session_state.holdings_exchange = {}
@@ -1177,28 +1519,45 @@ MANUAL_FETCH_BATCH_SIZE = 60
 FRESH_DATA_MAX_AGE = timedelta(minutes=25)
 
 if "_stock_cache" not in st.session_state:
+    # Zvycajne uz nastavene vyssie (spolu s holdings) - toto je len
+    # poistka pre neobvykly stav (napr. "holdings" uz bolo v session,
+    # ale "_stock_cache" este nie).
     st.session_state["_stock_cache"] = _load_stock_cache_from_disk()
 if "_fetch_cursor" not in st.session_state:
     st.session_state["_fetch_cursor"] = 0
+if "_sheet_backup_last_write_ts" not in st.session_state:
+    st.session_state["_sheet_backup_last_write_ts"] = None
 
 
-def _run_fetch_pass(max_attempts, spinner_text=None):
+def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None):
     """
     Spusti jeden priebeh sťahovania dat pre drzane akcie: round-robin
     poradie, trvala cache naprieč behmi/session/restartami appky, a
     okamzite zastavenie pri rate-limite. Da sa zavolat viackrat za beh
     appky (napr. automaticky raz na zaciatku + znova na ziadost
     pouzivatela cez tlacidlo v sekcii "Sprava dat").
+
+    Ak Yahoo narazi na rate-limit (circuit breaker), pre zvysne tickery
+    v tomto priebehu sa - ak je nakonfigurovany - skusi ZALOZNY zdroj
+    (Twelve Data, len cena, pozri fetch_price_fallback_twelvedata) namiesto
+    toho, aby ostali na starych datach az do dalsieho behu.
+
     Vracia dict {ticker: rec} a suhrnny dict so statistikami.
     """
+    if max_fallback_attempts is None:
+        max_fallback_attempts = TWELVEDATA_AUTO_MAX_PER_RUN
     st.session_state["_fetch_errors"] = {}
+    st.session_state["_fetch_errors_fallback"] = {}
     _cache = st.session_state["_stock_cache"]
     _records = {}
     _n_fresh_ok = 0
     _n_stale = 0
     _n_missing = 0
+    _n_fallback_price = 0
     _rate_limited_hit = False
+    _fallback_rate_limited_hit = False
     _fresh_attempts = 0
+    _fallback_attempts = 0
 
     _all_tickers = list(st.session_state.holdings)
     if _all_tickers:
@@ -1248,6 +1607,36 @@ def _run_fetch_pass(max_attempts, spinner_text=None):
                         if "RateLimit" in _err or "Too Many Requests" in _err:
                             _rate_limited_hit = True
 
+                # Yahoo je zablokovany (circuit breaker uz spusteny) -
+                # skus aspon cenu zo zalozneho zdroja (Twelve Data), aby
+                # cena a z nej odvodene hodnoty neostali zamrznute na
+                # starych udajoch pocas celeho (casto viachodinoveho)
+                # vypadku Yahoo. Dividendove a ine pomalsie sa meniace
+                # udaje ostanu na poslednej znamej hodnote.
+                if (not _is_fresh_enough and _rate_limited_hit
+                        and TWELVEDATA_ENABLED
+                        and not _fallback_rate_limited_hit
+                        and _fallback_attempts < max_fallback_attempts):
+                    _fallback_attempts += 1
+                    _fb = fetch_price_fallback_twelvedata(_tkr)
+                    if _fb is not None:
+                        _base = _cache.get(_tkr)
+                        _base_rec = dict(_base["rec"]) if _base is not None else None
+                        if _base_rec is not None:
+                            _base_rec["price"] = _fb["price"]
+                            if _fb.get("currency"):
+                                _base_rec["currency"] = _fb["currency"]
+                            _base_rec["price_source"] = "twelvedata"
+                            _cache[_tkr] = {
+                                "rec": _base_rec, "ts": _now,
+                                "source": "twelvedata (len cena)",
+                            }
+                            _n_fallback_price += 1
+                    else:
+                        _ferr = st.session_state["_fetch_errors_fallback"].get(_tkr, "")
+                        if "limit" in _ferr.lower() or "429" in _ferr:
+                            _fallback_rate_limited_hit = True
+
                 _entry = _cache.get(_tkr)
                 if _entry is not None:
                     _rec2 = dict(_entry["rec"])
@@ -1274,6 +1663,8 @@ def _run_fetch_pass(max_attempts, spinner_text=None):
     summary = {
         "fresh": _n_fresh_ok, "stale": _n_stale,
         "missing": _n_missing, "rate_limited": _rate_limited_hit,
+        "fallback_price": _n_fallback_price,
+        "fallback_rate_limited": _fallback_rate_limited_hit,
     }
     return _records, summary
 
@@ -1321,8 +1712,70 @@ def _data_freshness_caption():
     return "Data k: " + ", ".join(_parts)
 
 
+SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
+
+
+def _force_write_stock_backup_to_sheet():
+    """
+    Okamzite (bez ohladu na throttling) zapise aktualnu _stock_cache do
+    zalohovych stlpcov Google Sheets. Pouziva ju manualne tlacidlo v
+    sekcii "Sprava dat" aj automaticky throttled zapis nizsie.
+    """
+    ws_b, _ = _connect_gsheet()
+    if ws_b is None:
+        st.session_state["_sheet_backup_status"] = {
+            "ok": False, "detail": "GSheets nie je pripojeny.",
+        }
+        return False
+    _cache = st.session_state.get("_stock_cache", {})
+    if not _cache:
+        st.session_state["_sheet_backup_status"] = {
+            "ok": False,
+            "detail": "Zatial nie su ziadne stiahnute data na zalohovanie.",
+        }
+        return False
+    try:
+        _write_full_sheet(
+            ws_b, st.session_state.holdings,
+            st.session_state.holdings_exchange, _cache,
+            clear=False,
+        )
+        _now_b = datetime.now(timezone.utc)
+        st.session_state["_sheet_backup_last_write_ts"] = _now_b
+        st.session_state["_sheet_backup_status"] = {
+            "ok": True,
+            "detail": (
+                "Zaloha ulozena o "
+                + _now_b.astimezone(BRATISLAVA_TZ).strftime("%H:%M:%S")
+            ),
+        }
+        return True
+    except Exception as e:
+        st.session_state["_sheet_backup_status"] = {
+            "ok": False,
+            "detail": "Chyba: " + type(e).__name__ + ": " + str(e),
+        }
+        return False
+
+
+def _maybe_write_stock_backup_to_sheet():
+    """
+    Zapise zalohu do Google Sheets automaticky, ale NAJVIAC raz za
+    SHEET_BACKUP_MIN_INTERVAL (aby sa pri kazdom auto-refreshi (10 min)
+    zbytocne nezapisovalo do Sheetu). Ak este nikdy nebola zapisana
+    (nova session aj novy Sheet), zapise sa hned po prvych stiahnutych
+    datach - nech ochrana zacne platit co najskor.
+    """
+    _last = st.session_state.get("_sheet_backup_last_write_ts")
+    _now_b = datetime.now(timezone.utc)
+    if _last is not None and (_now_b - _last) < SHEET_BACKUP_MIN_INTERVAL:
+        return
+    _force_write_stock_backup_to_sheet()
+
+
 stock_records, _fetch_summary_now = _run_fetch_pass(MAX_FRESH_FETCHES_PER_RUN)
 st.session_state["_fetch_summary"] = _fetch_summary_now
+_maybe_write_stock_backup_to_sheet()
 
 
 # ============================================================
@@ -1429,23 +1882,29 @@ with st.expander("Sprava dat", expanded=not _gs_status["ok"]):
             _, _fresh = _connect_gsheet()
             st.session_state["gsheet_status"] = _fresh
             if _fresh.get("ok"):
-                _reloaded = load_holdings()
+                _reloaded, _sheet_backup_r = load_holdings_and_backup()
                 st.session_state.holdings = {
                     tkr: rec.get("qty", 0) for tkr, rec in _reloaded.items()
                 }
                 st.session_state.holdings_exchange = {
                     tkr: rec.get("exchange", "") for tkr, rec in _reloaded.items()
                 }
+                st.session_state["_stock_cache"] = _merge_caches(
+                    st.session_state.get("_stock_cache", {}), _sheet_backup_r
+                )
             st.rerun()
     with _dcol2:
         if st.button("Nacitat portfolio znova z GSheets"):
-            _reloaded = load_holdings()
+            _reloaded, _sheet_backup_r = load_holdings_and_backup()
             st.session_state.holdings = {
                 tkr: rec.get("qty", 0) for tkr, rec in _reloaded.items()
             }
             st.session_state.holdings_exchange = {
                 tkr: rec.get("exchange", "") for tkr, rec in _reloaded.items()
             }
+            st.session_state["_stock_cache"] = _merge_caches(
+                st.session_state.get("_stock_cache", {}), _sheet_backup_r
+            )
             st.rerun()
     st.divider()
     st.caption("Stiahni aktualny stav portfolia ako JSON.")
@@ -1496,7 +1955,9 @@ with st.expander("Sprava dat", expanded=not _gs_status["ok"]):
                 "Stahujem dalsiu davku (" + str(MANUAL_FETCH_BATCH_SIZE)
                 + " akcii)..."
             ),
+            max_fallback_attempts=TWELVEDATA_MANUAL_MAX_PER_RUN,
         )
+        _force_write_stock_backup_to_sheet()
         st.rerun()
 
     _fetch_errs_early = st.session_state.get("_fetch_errors", {})
@@ -1514,6 +1975,85 @@ with st.expander("Sprava dat", expanded=not _gs_status["ok"]):
                     "... a dalsich "
                     + str(len(_fetch_errs_early) - len(_sample)) + "."
                 )
+
+    st.divider()
+    st.markdown("**Zalozny zdroj dat pri vypadku Yahoo (Twelve Data) - len cena**")
+    if TWELVEDATA_ENABLED:
+        st.caption(
+            "Nakonfigurovane. Pouziva sa automaticky LEN vtedy, ked "
+            "Yahoo Finance odmietne dalsie poziadavky (rate-limit) - "
+            "vtedy sa aspon aktualna cena (a z nej odvodene %) dotiahne "
+            "odtialto. Dividendove a ostatne udaje ostanu na poslednej "
+            "znamej hodnote - Twelve Data ich na bezplatnom plane "
+            "neposkytuje, no menia sa len niekolkokrat rocne, takze to "
+            "nevadi."
+        )
+        if _fsum_early.get("fallback_price"):
+            st.caption(
+                str(_fsum_early["fallback_price"])
+                + " akcii pri poslednom nacitani pouzilo cenu zo "
+                "zalozneho zdroja (Yahoo bol zablokovany)."
+            )
+        if _fsum_early.get("fallback_rate_limited"):
+            st.warning(
+                "Aj zalozny zdroj (Twelve Data) momentalne odmieta "
+                "poziadavky (vycerpany denny/minutovy limit)."
+            )
+        _fb_errs_early = st.session_state.get("_fetch_errors_fallback", {})
+        if _fb_errs_early:
+            with st.expander(
+                "Detail chyb zo zalozneho zdroja ("
+                + str(len(_fb_errs_early)) + ")",
+                expanded=False,
+            ):
+                _fb_sample = list(_fb_errs_early.items())[:15]
+                for _tk, _msg in _fb_sample:
+                    st.caption("**" + _tk + "**: " + _msg)
+    else:
+        st.caption(
+            "Nie je nakonfigurovane. Ak chces, aby appka pri vypadku "
+            "Yahoo Finance aspon obnovila aktualnu cenu, zaloz si "
+            "bezplatny API kluc na twelvedata.com (bez karty, staci "
+            "registracia) a v st.secrets pridaj riadok: "
+            "twelvedata_api_key = \"tvoj_kluc\". Bez neho appka funguje "
+            "presne ako doteraz (len Yahoo + ulozena zaloha nizsie)."
+        )
+
+    st.divider()
+    st.markdown("**Zaloha dat v Google Sheets**")
+    _last_bkp_ts = st.session_state.get("_sheet_backup_last_write_ts")
+    _bkp_status = st.session_state.get("_sheet_backup_status")
+    if _last_bkp_ts is not None:
+        st.caption(
+            "Posledna zaloha zapisana: "
+            + _last_bkp_ts.astimezone(BRATISLAVA_TZ).strftime("%d.%m.%Y %H:%M:%S")
+            + ". Automaticky sa aktualizuje najviac raz za "
+            + str(int(SHEET_BACKUP_MIN_INTERVAL.total_seconds() // 60))
+            + " minut a obsahuje posledne stiahnute udaje o vsetkych "
+            "drzanych akciach (cena, dividendy, rast...) priamo v tom "
+            "istom liste Google Sheets, vedla Ticker/Qty/Exchange (stlpce "
+            "D a dalej). Ak by niekedy vypadol Yahoo "
+            "AJ zalozny zdroj naraz (alebo appka bezela na restartovanom "
+            "serveri bez lokalneho cache suboru), appka pouzije tieto "
+            "ulozene data namiesto N/A - spolu s datumom, kedy boli "
+            "naposledy aktualne."
+        )
+    else:
+        st.caption(
+            "Zatial ziadna zaloha. Vytvori sa automaticky po prvom "
+            "uspesnom stiahnuti dat (alebo hned tlacidlom nizsie)."
+        )
+    if _bkp_status is not None and _bkp_status.get("ok") is False:
+        st.warning("Posledny zapis zalohy zlyhal: " + str(_bkp_status.get("detail", "")))
+    if st.button("Zapisat zalohu do Google Sheets teraz"):
+        if _force_write_stock_backup_to_sheet():
+            st.success("Zaloha ulozena.")
+        else:
+            st.error(
+                "Zapis zalohy zlyhal: "
+                + str(st.session_state.get("_sheet_backup_status", {}).get("detail", ""))
+            )
+        st.rerun()
 
 st.markdown("#### Pridat / odobrat akciu")
 
@@ -1589,6 +2129,13 @@ def _on_add_stock_click():
             st.session_state["add_stock_msg"] = (
                 "error", "Ticker " + ticker_clean + " sa nepodarilo najst.")
             return
+        # Hned ulozit do _stock_cache, aby nasledujuci save_holdings()
+        # vedel zapisat zalohu aj pre tento prave pridany ticker (inak
+        # by zalozne stlpce pre neho ostali prazdne az do dalsieho
+        # fetch-pass behu).
+        st.session_state.setdefault("_stock_cache", {})[ticker_clean] = {
+            "rec": new_data, "ts": datetime.now(timezone.utc), "source": "yahoo",
+        }
         current = float(st.session_state.holdings.get(ticker_clean, 0))
         new_total = current + qty_val
         # Ulozenie ako Python float – NIKDY ako formatovany string
