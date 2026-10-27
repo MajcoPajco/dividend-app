@@ -252,21 +252,33 @@ def format_qty(q):
 
 
 def _pct_change_over_period(hist, months=None, years=None):
+    """
+    Percentualna zmena ceny za obdobie. KLUCOVA OPRAVA: historia sa pred
+    vypoctom ocisti (zoradenie, duplicity v indexe, casova zona) a hodnota
+    z minulosti sa hlada cez searchsorted - predtym hist.asof() pri
+    "necistom" indexe (napr. LEG) ticho zlyhal a vsetky rasty vysli N/A.
+    """
     if hist is None or len(hist) == 0:
         return None
     try:
-        last_date = hist.index[-1]
-        last_price = float(hist.iloc[-1])
+        h = hist.dropna()
+        if len(h) == 0:
+            return None
+        idx = pd.DatetimeIndex(h.index)
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+        h = pd.Series(h.values, index=idx)
+        h = h[~h.index.duplicated(keep="last")].sort_index()
+        last_date = h.index[-1]
+        last_price = float(h.iloc[-1])
         if pd.isna(last_price):
             return None
         offset = pd.DateOffset(years=years) if years else pd.DateOffset(months=months)
         target_date = last_date - offset
-        past_price = hist.asof(target_date)
-        if past_price is None:
+        pos = h.index.searchsorted(target_date, side="right") - 1
+        if pos < 0:
             return None
-        if isinstance(past_price, float) and pd.isna(past_price):
-            return None
-        past_price = float(past_price)
+        past_price = float(h.iloc[pos])
         if past_price == 0 or pd.isna(past_price):
             return None
         result = (last_price - past_price) / past_price * 100
@@ -1031,6 +1043,52 @@ def _parse_stock_info(ticker, info, dividends):
     }
 
 
+def _history_via_chart_api(ticker):
+    """
+    Zalozna cesta k historii ceny a dividend cez priamy Yahoo "chart"
+    endpoint (ina cesta nez t.history() v kniznici yfinance). Pouziva sa,
+    ked t.history() vrati prazdnu/nepouzitelnu historiu (napr. LEG: v
+    Google Sheets mal cenu, ale ziadne dividendy ani rasty). Vrati
+    (close_series, dividends_series, chyba).
+    """
+    try:
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/"
+            + requests.utils.quote(ticker, safe=""),
+            params={"range": "max", "interval": "1d", "events": "div"},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                   "Chrome/124.0 Safari/537.36"},
+            timeout=15,
+        )
+        if resp.status_code == 429:
+            raise RuntimeError("Too Many Requests (chart API)")
+        res = (resp.json().get("chart", {}).get("result") or [None])[0]
+        if not res:
+            return None, None, "chart API: ziadny vysledok (HTTP " + str(resp.status_code) + ")"
+        ts = res.get("timestamp") or []
+        closes = ((res.get("indicators", {}).get("quote") or [{}])[0]
+                  .get("close") or [])
+        if len(ts) != len(closes) or len(ts) == 0:
+            return None, None, "chart API: prazdna historia"
+        idx = pd.to_datetime(ts, unit="s", utc=True).tz_localize(None).normalize()
+        close = pd.Series(closes, index=idx, dtype="float64").dropna()
+        divs_raw = (res.get("events") or {}).get("dividends") or {}
+        div_pairs = sorted(
+            (pd.Timestamp(int(v["date"]), unit="s").normalize(), float(v["amount"]))
+            for v in divs_raw.values() if v.get("amount")
+        )
+        divs = (pd.Series([a for _, a in div_pairs],
+                          index=pd.DatetimeIndex([d for d, _ in div_pairs]),
+                          dtype="float64")
+                if div_pairs else pd.Series(dtype=float))
+        return close, divs, ""
+    except Exception as e:
+        if "Too Many Requests" in str(e):
+            raise
+        return None, None, "chart API: " + type(e).__name__ + ": " + str(e)[:100]
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def _fetch_stock_data_cached(ticker):
     """
@@ -1104,6 +1162,16 @@ def _fetch_stock_data_cached(ticker):
     else:
         dividends = pd.Series(dtype=float)
 
+    # t.history() nedal pouzitelnu historiu - skus priamy chart endpoint.
+    if close_hist is None:
+        _c, _d, _cerr = _history_via_chart_api(ticker)
+        if _c is not None and len(_c) >= MIN_HIST_ROWS:
+            close_hist = _c
+            dividends = _d[_d > 0] if _d is not None else pd.Series(dtype=float)
+            _hist_err = ""
+        elif _cerr:
+            _hist_err = (_hist_err + " | " if _hist_err else "") + _cerr
+
     rec = _parse_stock_info(ticker, info, dividends)
     if rec is None:
         raise _LookupMiss("no price data for " + ticker)
@@ -1147,8 +1215,10 @@ def _rec_history_ok(rec):
     maju aspon jednu hodnotu rastu."""
     if rec is None:
         return False
-    if "history_ok" in rec:
-        return bool(rec["history_ok"])
+    if rec.get("history_ok") is False:
+        return False
+    # Priznak history_ok=True sa NEVERI naslepo (v2 ho nastavovala aj pri
+    # zazname s prazdnymi rastmi) - rozhoduje, ci je aspon jeden rast.
     return any(v is not None for v in (rec.get("growth") or {}).values())
 
 
@@ -1799,7 +1869,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v3"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v5"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
