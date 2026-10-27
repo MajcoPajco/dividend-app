@@ -1054,11 +1054,32 @@ def _fetch_stock_data_cached(ticker):
     t = yf.Ticker(ticker)
     info = t.info or {}
 
-    try:
-        hist_full = t.history(
-            period="max", interval="1d", auto_adjust=False, actions=True)
-    except Exception:
-        hist_full = None
+    # KLUCOVA OPRAVA (akcie s cenou ale bez rastu/dividend, napr. LEG):
+    # povodny kod pri chybe t.history() ticho nastavil hist_full=None,
+    # takze vysledok mal cenu (z t.info) ale vsetky rasty N/A a prazdnu
+    # historiu dividend - a takyto NEUPLNY zaznam sa potom (a) ulozil do
+    # st.cache_data na 30 min a (b) bol oznaceny ako "cerstvy", takze ho
+    # ani manualna aktualizacia znova nestiahla. Teraz sa historia skusi
+    # viackrat (period max -> 10y -> 5y), rate-limit chyba sa PREPUSTI
+    # (aby fungoval circuit breaker) a ak historia stale chyba, vyhodi sa
+    # _IncompleteHistory (vyhodena vynimka sa do st.cache_data neuklada,
+    # takze sa pri dalsom behu skusi znova).
+    hist_full = None
+    _hist_err = ""
+    for _period in ("max", "10y", "5y"):
+        try:
+            _h = t.history(
+                period=_period, interval="1d", auto_adjust=False,
+                actions=True)
+        except Exception as _e:
+            if "RateLimit" in type(_e).__name__ or "Too Many Requests" in str(_e):
+                raise
+            _hist_err = type(_e).__name__ + ": " + str(_e)[:120]
+            continue
+        if _h is not None and "Close" in _h.columns and len(_h.dropna(subset=["Close"])) > 0:
+            hist_full = _h
+            break
+        _hist_err = "prazdna historia (period=" + _period + ")"
 
     if hist_full is not None and "Close" in hist_full.columns:
         close_hist = hist_full["Close"].dropna()
@@ -1087,12 +1108,39 @@ def _fetch_stock_data_cached(ticker):
     # do cache) - znizuje riziko, ze sa pri velkom portfoliu narazi na
     # rate-limit Yahoo Finance.
     time.sleep(0.12)
+    if close_hist is None:
+        rec["history_ok"] = False
+        raise _IncompleteHistory(rec, _hist_err or "historia ceny nedostupna")
+    rec["history_ok"] = True
     return rec
+
+
+class _IncompleteHistory(Exception):
+    """Cena sa stiahla, ale historia (rast, dividendy) nie. Nesie
+    ciastocny zaznam v atribute 'rec'."""
+    def __init__(self, rec, msg):
+        super().__init__(msg)
+        self.rec = rec
+
+
+def _rec_history_ok(rec):
+    """True, ak zaznam obsahuje historiu (rast/dividendy). Stare zaznamy
+    bez priznaku 'history_ok' (z disku/Sheets) sa posudia podla toho, ci
+    maju aspon jednu hodnotu rastu."""
+    if rec is None:
+        return False
+    if "history_ok" in rec:
+        return bool(rec["history_ok"])
+    return any(v is not None for v in (rec.get("growth") or {}).values())
 
 
 def fetch_stock_data(ticker):
     try:
         return _fetch_stock_data_cached(ticker)
+    except _IncompleteHistory as e:
+        errs = st.session_state.setdefault("_fetch_errors", {})
+        errs[ticker] = "NoHistory: " + str(e)[:200]
+        return e.rec
     except Exception as e:
         errs = st.session_state.setdefault("_fetch_errors", {})
         errs[ticker] = type(e).__name__ + ": " + str(e)[:200]
@@ -1554,6 +1602,7 @@ def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None)
     _n_stale = 0
     _n_missing = 0
     _n_fallback_price = 0
+    _incomplete = []
     _rate_limited_hit = False
     _fallback_rate_limited_hit = False
     _fresh_attempts = 0
@@ -1589,9 +1638,13 @@ def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None)
                     )
                     and "next_expected_amount" in _entry["rec"]
                 )
+                # Zaznam bez historie (len cena, rasty N/A) sa NIKDY
+                # nepovazuje za cerstvy - inak by sa neuplny zaznam (napr.
+                # LEG) nikdy znova nestiahol, ani manualnou aktualizaciou.
                 _is_fresh_enough = (
                     _entry is not None
                     and _has_complete_schema
+                    and _rec_history_ok(_entry["rec"])
                     and (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE
                 )
                 if (not _is_fresh_enough and not _rate_limited_hit
@@ -1599,6 +1652,22 @@ def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None)
                     _fresh_attempts += 1
                     _rec = fetch_stock_data(_tkr)
                     if _rec is not None:
+                        _old = _cache.get(_tkr)
+                        if (not _rec_history_ok(_rec) and _old is not None
+                                and _rec_history_ok(_old["rec"])):
+                            # Nova stiahnutie je neuplne, ale mame starsi
+                            # KOMPLETNY zaznam - zachovaj jeho historiu
+                            # (rast, dividendy) a obnov len cenu/info.
+                            _merged = dict(_old["rec"])
+                            for _k in ("price", "currency", "name",
+                                       "exchange", "exchange_code",
+                                       "country", "annual_rate",
+                                       "dividend_yield_pct", "ex_div_date",
+                                       "pay_div_date"):
+                                if _rec.get(_k) is not None:
+                                    _merged[_k] = _rec[_k]
+                            _merged["history_ok"] = True
+                            _rec = _merged
                         _cache[_tkr] = {
                             "rec": _rec, "ts": _now, "source": "yahoo",
                         }
@@ -1647,6 +1716,8 @@ def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None)
                         )
                     _records[_tkr] = _rec2
                     st.session_state.holdings_exchange[_tkr] = _rec2["exchange"]
+                    if not _rec_history_ok(_rec2):
+                        _incomplete.append(_tkr)
                     if (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE:
                         _n_fresh_ok += 1
                     else:
@@ -1663,6 +1734,7 @@ def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None)
     summary = {
         "fresh": _n_fresh_ok, "stale": _n_stale,
         "missing": _n_missing, "rate_limited": _rate_limited_hit,
+        "incomplete": _incomplete,
         "fallback_price": _n_fallback_price,
         "fallback_rate_limited": _fallback_rate_limited_hit,
     }
@@ -2232,6 +2304,20 @@ _fetch_errs = st.session_state.get("_fetch_errors", {})
 _freshness_cap = _data_freshness_caption()
 if _freshness_cap:
     st.caption(_freshness_cap)
+
+if _fsum.get("incomplete"):
+    _inc = _fsum["incomplete"]
+    _inc_reasons = [
+        _tk + ": " + _fetch_errs.get(_tk, "historia sa nepodarila stiahnut")
+        for _tk in _inc[:5]
+    ]
+    st.caption(
+        "Neuplne data (cena je, ale rast/dividendy chybaju - Yahoo "
+        "nevratil historiu, appka to skusa znova pri kazdom behu): "
+        + ", ".join(_inc[:15])
+        + (" ..." if len(_inc) > 15 else "")
+        + ". Dovod: " + "; ".join(_inc_reasons)
+    )
 
 if _fsum.get("rate_limited"):
     st.warning(
