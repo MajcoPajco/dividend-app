@@ -660,6 +660,7 @@ def _read_backup_rows(all_vals):
             "dividend_yield_pct": _f(vals, "DividendYieldPct"),
             "frequency": vals.get("Frequency") or "N/A",
             "dividends_history": _div_history_from_json(vals.get("DivHistoryJSON")),
+            "logic_v": HIST_LOGIC_VERSION,
             "growth": {
                 "1m": _f(vals, "Growth1M"), "3m": _f(vals, "Growth3M"),
                 "6m": _f(vals, "Growth6M"), "1y": _f(vals, "Growth1Y"),
@@ -1043,6 +1044,46 @@ def _parse_stock_info(ticker, info, dividends):
     }
 
 
+# Verzia logiky sťahovania historie - zmena vynuti jednorazove opatovne
+# stiahnutie zaznamov ulozenych starsou logikou (aj ked su "cerstve").
+HIST_LOGIC_VERSION = 6
+
+
+def _span_days(series):
+    """Pocet dni, ktore historia pokryva (0 pre prazdnu/None)."""
+    try:
+        if series is None or len(series) < 2:
+            return 0
+        return int((series.index[-1] - series.index[0]).days)
+    except Exception:
+        return 0
+
+
+def _history_via_twelvedata(ticker):
+    """Dlha historia zaverecnych cien z Twelve Data (len ak je API kluc).
+    Vrati pd.Series (index datum) alebo None."""
+    if not TWELVEDATA_ENABLED:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.twelvedata.com/time_series",
+            params={"symbol": ticker, "interval": "1day",
+                    "outputsize": 5000, "apikey": TWELVEDATA_API_KEY},
+            timeout=20,
+        )
+        time.sleep(8)  # bezplatny limit 8 poziadaviek/min
+        vals = resp.json().get("values") or []
+        if not vals:
+            return None
+        ser = pd.Series(
+            [float(v["close"]) for v in vals],
+            index=pd.to_datetime([v["datetime"] for v in vals]),
+        ).sort_index()
+        return ser
+    except Exception:
+        return None
+
+
 def _history_via_chart_api(ticker):
     """
     Zalozna cesta k historii ceny a dividend cez priamy Yahoo "chart"
@@ -1162,15 +1203,44 @@ def _fetch_stock_data_cached(ticker):
     else:
         dividends = pd.Series(dtype=float)
 
-    # t.history() nedal pouzitelnu historiu - skus priamy chart endpoint.
-    if close_hist is None:
+    # KLUCOVA OPRAVA (LEG: Yahoo vratil historiu len za ~1 mesiac, takze
+    # rast za 3M/6M/1R/5R/10R vysiel N/A, hoci 1M islo): ak je historia
+    # "plytka" (kratsia ako ~400 dni) alebo chyba, skusia sa dalsie cesty
+    # a pouzije sa ta s NAJDLHSOU historiou:
+    #   a) yfinance s explicitnym datumom startu (period="max" Yahoo pre
+    #      niektore tickery oreze),
+    #   b) priamy Yahoo chart endpoint,
+    #   c) Twelve Data time_series (ak je nastaveny API kluc).
+    if close_hist is None or _span_days(close_hist) < 400:
+        _sources = []
+        if close_hist is not None:
+            _sources.append((close_hist, dividends))
+        try:
+            _h2 = t.history(start="1980-01-01", interval="1d",
+                            auto_adjust=False, actions=True)
+            if _h2 is not None and "Close" in _h2.columns:
+                _c2 = _h2["Close"].dropna()
+                _d2 = (_h2["Dividends"][_h2["Dividends"] > 0]
+                       if "Dividends" in _h2.columns else pd.Series(dtype=float))
+                _sources.append((_c2, _d2))
+        except Exception as _e:
+            if "RateLimit" in type(_e).__name__ or "Too Many Requests" in str(_e):
+                raise
+            _hist_err = type(_e).__name__ + ": " + str(_e)[:100]
         _c, _d, _cerr = _history_via_chart_api(ticker)
-        if _c is not None and len(_c) >= MIN_HIST_ROWS:
-            close_hist = _c
-            dividends = _d[_d > 0] if _d is not None else pd.Series(dtype=float)
-            _hist_err = ""
+        if _c is not None and len(_c) > 0:
+            _sources.append((_c, _d if _d is not None else pd.Series(dtype=float)))
         elif _cerr:
             _hist_err = (_hist_err + " | " if _hist_err else "") + _cerr
+        if _span_days(max((x[0] for x in _sources), key=_span_days, default=None)) < 400:
+            _c3 = _history_via_twelvedata(ticker)
+            if _c3 is not None and len(_c3) > 0:
+                _sources.append((_c3, pd.Series(dtype=float)))
+        _good = [x for x in _sources if len(x[0]) >= MIN_HIST_ROWS]
+        if _good:
+            close_hist = max(_good, key=lambda x: _span_days(x[0]))[0]
+            dividends = max((x[1] for x in _good), key=len)
+            _hist_err = ""
 
     rec = _parse_stock_info(ticker, info, dividends)
     if rec is None:
@@ -1190,6 +1260,7 @@ def _fetch_stock_data_cached(ticker):
     if close_hist is None or not any(
             v is not None for v in rec["growth"].values()):
         rec["history_ok"] = False
+        rec["logic_v"] = HIST_LOGIC_VERSION
         _diag = _hist_err or (
             "rast sa nepodarilo vypocitat (historia: "
             + str(len(close_hist)) + " riadkov, "
@@ -1198,6 +1269,7 @@ def _fetch_stock_data_cached(ticker):
         )
         raise _IncompleteHistory(rec, _diag)
     rec["history_ok"] = True
+    rec["logic_v"] = HIST_LOGIC_VERSION
     return rec
 
 
@@ -1733,6 +1805,7 @@ def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None)
                     _entry is not None
                     and _has_complete_schema
                     and _rec_history_ok(_entry["rec"])
+                    and _entry["rec"].get("logic_v") == HIST_LOGIC_VERSION
                     and (_now - _entry["ts"]) < FRESH_DATA_MAX_AGE
                 )
                 if (not _is_fresh_enough and not _rate_limited_hit
@@ -1869,7 +1942,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v5"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v6"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
