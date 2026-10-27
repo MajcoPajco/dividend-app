@@ -1066,7 +1066,10 @@ def _fetch_stock_data_cached(ticker):
     # takze sa pri dalsom behu skusi znova).
     hist_full = None
     _hist_err = ""
-    for _period in ("max", "10y", "5y"):
+    # Historia sa povazuje za pouzitelnu az od MIN_HIST_ROWS riadkov
+    # (Yahoo obcas vrati len 1-2 riadky - vtedy by vsetky rasty vysli N/A).
+    MIN_HIST_ROWS = 20
+    for _period in ("max", "10y", "5y", "2y"):
         try:
             _h = t.history(
                 period=_period, interval="1d", auto_adjust=False,
@@ -1076,10 +1079,18 @@ def _fetch_stock_data_cached(ticker):
                 raise
             _hist_err = type(_e).__name__ + ": " + str(_e)[:120]
             continue
-        if _h is not None and "Close" in _h.columns and len(_h.dropna(subset=["Close"])) > 0:
+        _n_rows = (
+            0 if (_h is None or "Close" not in _h.columns)
+            else len(_h["Close"].dropna())
+        )
+        if _n_rows >= MIN_HIST_ROWS:
             hist_full = _h
+            _hist_err = ""
             break
-        _hist_err = "prazdna historia (period=" + _period + ")"
+        _hist_err = (
+            "historia ma len " + str(_n_rows) + " riadkov (period="
+            + _period + ")"
+        )
 
     if hist_full is not None and "Close" in hist_full.columns:
         close_hist = hist_full["Close"].dropna()
@@ -1108,9 +1119,16 @@ def _fetch_stock_data_cached(ticker):
     # do cache) - znizuje riziko, ze sa pri velkom portfoliu narazi na
     # rate-limit Yahoo Finance.
     time.sleep(0.12)
-    if close_hist is None:
+    if close_hist is None or not any(
+            v is not None for v in rec["growth"].values()):
         rec["history_ok"] = False
-        raise _IncompleteHistory(rec, _hist_err or "historia ceny nedostupna")
+        _diag = _hist_err or (
+            "rast sa nepodarilo vypocitat (historia: "
+            + str(len(close_hist)) + " riadkov, "
+            + str(close_hist.index[0].date()) + " az "
+            + str(close_hist.index[-1].date()) + ")"
+        )
+        raise _IncompleteHistory(rec, _diag)
     rec["history_ok"] = True
     return rec
 
@@ -1781,7 +1799,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts)
+    return "Data k: " + ", ".join(_parts) + "  |  kod v3"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
