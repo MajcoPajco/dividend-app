@@ -1942,7 +1942,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v6"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v7"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -2494,9 +2494,28 @@ if _fsum.get("rate_limited"):
 if not st.session_state.holdings:
     st.info("Zatial nemas pridane ziadne akcie. Pridaj prvu vyssie.")
 else:
+    # Vyhladavanie v mojich akciach (ticker alebo nazov firmy).
+    _hsearch = st.text_input(
+        "Hladat v mojich akciach",
+        placeholder="Hladat podla tickera alebo nazvu, napr. AAPL alebo Coca",
+        key="holdings_search",
+        label_visibility="collapsed",
+    ).strip().lower()
+    _hmsg = st.session_state.pop("holdings_edit_msg", None)
+    if _hmsg:
+        getattr(st, _hmsg[0])(_hmsg[1])
+    st.caption(
+        "Mnozstvo mozes prepisat priamo v tabulke (dvojklik na bunku, "
+        "Enter) - zmena sa hned ulozi aj do Google Sheets. Zadanie 0 "
+        "akciu z portfolia odstrani."
+    )
     rows_h = []
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
+        if _hsearch:
+            _nm = (rec["name"] if rec is not None else tkr)
+            if _hsearch not in tkr.lower() and _hsearch not in str(_nm).lower():
+                continue
         if rec is None:
             rows_h.append({
                 "Ticker": tkr,
@@ -2531,7 +2550,11 @@ else:
                 "Mnozstvo": format_qty(float(qty)),
             })
 
-    df_h = pd.DataFrame(rows_h)
+    df_h = pd.DataFrame(rows_h, columns=[
+        "Ticker", "Meno firmy", "Burza", "Stat", "Aktualna cena",
+        "Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]", "Rast 1R [%]",
+        "Rast 5R [%]", "Rast 10R [%]", "Div.Rocne[%]", "Mnozstvo",
+    ])
     _gcols = ["Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]",
                "Rast 1R [%]", "Rast 5R [%]", "Rast 10R [%]"]
 
@@ -2554,33 +2577,85 @@ else:
     except AttributeError:
         styled_h = df_h.style.applymap(_style_g, subset=_gcols)
 
-    # Vsetky stlpce su disabled – data_editor sluzi len na zobrazenie.
-    # Ziadna slucka neupdatuje session_state z editora.
-    # Mnozstvo sa meni VYLUCNE cez formular vyssie.
-    st.data_editor(
-        styled_h,
-        column_config={
-            "Ticker":        st.column_config.TextColumn(disabled=True),
-            "Meno firmy":    st.column_config.TextColumn(disabled=True),
-            "Burza":         st.column_config.TextColumn(disabled=True),
-            "Stat":          st.column_config.TextColumn(disabled=True),
-            "Aktualna cena": st.column_config.TextColumn(disabled=True),
-            "Rast 1M [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 3M [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 6M [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 1R [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 5R [%]":   st.column_config.TextColumn(disabled=True),
-            "Rast 10R [%]":  st.column_config.TextColumn(disabled=True),
-            "Div.Rocne[%]":  st.column_config.TextColumn(disabled=True),
-            "Mnozstvo":      st.column_config.TextColumn(
-                disabled=True,
-                help="Mnozstvo zmen cez formular 'Pridat / odobrat akciu'."),
-        },
-        hide_index=True,
-        use_container_width=True,
-        height=740,
-        key="holdings_editor",
-    )
+    if df_h.empty:
+        st.info("Ziadna akcia nezodpoveda hladanemu textu.")
+    else:
+        # Kluc editora obsahuje pocitadlo zmien a hladany text - po ulozeni
+        # zmeny alebo zmene filtra sa stav editora vynuluje, aby sa
+        # predchadzajuce upravy neaplikovali na posunute riadky.
+        _ekey = (
+            "holdings_editor_" + str(st.session_state.get("_hedit_ver", 0))
+            + "_" + _hsearch
+        )
+        edited_h = st.data_editor(
+            styled_h,
+            column_config={
+                "Ticker":        st.column_config.TextColumn(disabled=True),
+                "Meno firmy":    st.column_config.TextColumn(disabled=True),
+                "Burza":         st.column_config.TextColumn(disabled=True),
+                "Stat":          st.column_config.TextColumn(disabled=True),
+                "Aktualna cena": st.column_config.TextColumn(disabled=True),
+                "Rast 1M [%]":   st.column_config.TextColumn(disabled=True),
+                "Rast 3M [%]":   st.column_config.TextColumn(disabled=True),
+                "Rast 6M [%]":   st.column_config.TextColumn(disabled=True),
+                "Rast 1R [%]":   st.column_config.TextColumn(disabled=True),
+                "Rast 5R [%]":   st.column_config.TextColumn(disabled=True),
+                "Rast 10R [%]":  st.column_config.TextColumn(disabled=True),
+                "Div.Rocne[%]":  st.column_config.TextColumn(disabled=True),
+                "Mnozstvo":      st.column_config.TextColumn(
+                    help="Prepis mnozstvo (aj s desatinnou ciarkou). "
+                         "Ulozi sa hned do Google Sheets. 0 = odstranit akciu."),
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=740,
+            key=_ekey,
+        )
+
+        # Porovnanie po pozicii (edited_h ma rovnake poradie riadkov ako
+        # df_h, aj ked pouzivatel v UI zoradil tabulku).
+        _changes = {}
+        _bad = []
+        for _i in range(len(df_h)):
+            _old_q = str(df_h.iloc[_i]["Mnozstvo"])
+            _new_q = str(edited_h.iloc[_i]["Mnozstvo"])
+            if _new_q.strip() == _old_q.strip():
+                continue
+            _tk = str(df_h.iloc[_i]["Ticker"])
+            _pq = parse_qty_input(_new_q)
+            if _pq is None or _pq < 0:
+                _bad.append(_tk + " ('" + _new_q + "')")
+            else:
+                _changes[_tk] = _pq
+        if _bad:
+            st.warning(
+                "Neplatne mnozstvo: " + ", ".join(_bad)
+                + ". Zadaj nezaporne cislo, napr. 1,5 (0 = odstranit)."
+            )
+        if _changes:
+            _msgs = []
+            for _tk, _pq in _changes.items():
+                if _pq == 0:
+                    st.session_state.holdings.pop(_tk, None)
+                    st.session_state.holdings_exchange.pop(_tk, None)
+                    _msgs.append(_tk + " odstranena")
+                else:
+                    st.session_state.holdings[_tk] = float(_pq)
+                    _msgs.append(_tk + " = " + format_qty(_pq) + " ks")
+            save_holdings(
+                st.session_state.holdings,
+                st.session_state.holdings_exchange,
+            )
+            _lw = st.session_state.get("gsheet_last_write", {})
+            st.session_state["holdings_edit_msg"] = (
+                ("success" if _lw.get("ok") else "warning"),
+                "Ulozene: " + ", ".join(_msgs) + ". "
+                + str(_lw.get("detail", "")),
+            )
+            st.session_state["_hedit_ver"] = (
+                st.session_state.get("_hedit_ver", 0) + 1
+            )
+            st.rerun()
 
 # ============================================================
 # Spolocny vypocet: najblizsi buduci ex-div termin pre kazdu drzanu akciu
