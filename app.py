@@ -871,12 +871,44 @@ def lookup_isin_by_ticker(ticker):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _lookup_ticker_by_isin_cached(isin_clean):
+    # 1) OpenFIGI (bezplatne, bez kluca) - pre americke ISIN vrati priamo
+    #    americky ticker (napr. US0091581068 -> APD). yf.Search totiz pre
+    #    ISIN casto vrati zahranicnu kotaciu alebo nic.
+    try:
+        resp = requests.post(
+            "https://api.openfigi.com/v3/mapping",
+            json=[{"idType": "ID_ISIN", "idValue": isin_clean}],
+            headers={"Content-Type": "application/json"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            _data = (resp.json() or [{}])[0].get("data") or []
+            _us = [
+                d for d in _data
+                if d.get("exchCode") in ("US", "UN", "UW", "UA", "UQ", "UP", "UR")
+                and d.get("marketSector") == "Equity" and d.get("ticker")
+            ]
+            if _us:
+                _best = _us[0]
+                return {
+                    "symbol": str(_best["ticker"]).replace("/", "-").replace(" ", "-"),
+                    "name": _best.get("name") or _best["ticker"],
+                    "exchange": "",
+                }
+    except Exception:
+        pass
+    # 2) yf.Search (zalozna cesta)
     search = yf.Search(isin_clean, max_results=10, news_count=0)
     quotes = search.quotes or []
     if not quotes:
         raise _LookupMiss("no quotes for " + isin_clean)
     preferred = [q for q in quotes if q.get("quoteType") in ("EQUITY", "ETF")]
-    best = (preferred or quotes)[0]
+    pool = preferred or quotes
+    if isin_clean.startswith("US"):
+        # americky ISIN -> uprednostni americku kotaciu (symbol bez pripony)
+        _nodot = [q for q in pool if "." not in str(q.get("symbol", ""))]
+        pool = _nodot or pool
+    best = pool[0]
     symbol = best.get("symbol")
     if not symbol:
         raise _LookupMiss("no symbol for " + isin_clean)
@@ -1942,7 +1974,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v7"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v8"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -2359,8 +2391,19 @@ def _on_add_stock_click():
         # NAKUP
         new_data = fetch_stock_data(ticker_clean)
         if new_data is None:
+            _why = st.session_state.get("_fetch_errors", {}).get(ticker_clean, "")
+            if "RateLimit" in _why or "Too Many Requests" in _why:
+                _why_txt = (
+                    " Yahoo Finance momentalne blokuje poziadavky "
+                    "(rate-limit) - skus to znova o par minut.")
+            elif _why:
+                _why_txt = " Dovod: " + _why
+            else:
+                _why_txt = ""
             st.session_state["add_stock_msg"] = (
-                "error", "Ticker " + ticker_clean + " sa nepodarilo najst.")
+                "error",
+                "Ticker " + ticker_clean + " sa nepodarilo najst."
+                + _why_txt)
             return
         # Hned ulozit do _stock_cache, aby nasledujuci save_holdings()
         # vedel zapisat zalohu aj pre tento prave pridany ticker (inak
