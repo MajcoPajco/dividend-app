@@ -1274,6 +1274,38 @@ def _fetch_stock_data_cached(ticker):
             dividends = max((x[1] for x in _good), key=len)
             _hist_err = ""
 
+    # KLUCOVA OPRAVA (napr. APD: "no price data"): Yahoo obcas vrati
+    # t.info bez ceny (prazdny/okrajovy slovnik), hoci akcia existuje a ma
+    # historiu. Cenu, menu a burzu vtedy doplnime z t.fast_info, a ak ani
+    # to nie je, z poslednej zaverecnej ceny v historii.
+    if not any(info.get(_k) for _k in
+               ("currentPrice", "regularMarketPrice", "previousClose")):
+        info = dict(info)
+        _fi = None
+        try:
+            _fi = t.fast_info
+        except Exception:
+            _fi = None
+
+        def _fi_get(_key):
+            try:
+                return _fi[_key] if _fi is not None else None
+            except Exception:
+                return None
+
+        _px = _fi_get("last_price") or _fi_get("previous_close")
+        if not _px and close_hist is not None and len(close_hist) > 0:
+            _px = float(close_hist.iloc[-1])
+        if _px:
+            info["currentPrice"] = float(_px)
+            if not info.get("currency"):
+                info["currency"] = (
+                    _fi_get("currency")
+                    or ("USD" if "." not in ticker else "")
+                )
+            if not info.get("exchange"):
+                info["exchange"] = _fi_get("exchange") or ""
+
     rec = _parse_stock_info(ticker, info, dividends)
     if rec is None:
         raise _LookupMiss("no price data for " + ticker)
@@ -1974,7 +2006,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v8"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v9"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
