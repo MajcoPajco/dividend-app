@@ -287,6 +287,27 @@ def _pct_change_over_period(hist, months=None, years=None):
         return None
 
 
+def _num_or_nan(v):
+    """Cislo pre numericky stlpec tabulky (None/neplatne -> NaN), aby sa
+    stlpce rastu zoradovali podla HODNOTY, nie podla textu ("+9,73 %" by
+    sa pri textovom zoradeni radilo nad "+52,64 %")."""
+    try:
+        if v is None:
+            return float("nan")
+        f = float(v)
+        return f
+    except Exception:
+        return float("nan")
+
+
+def _fmt_growth_cell(v):
+    return "N/A" if pd.isna(v) else format_growth(float(v))
+
+
+def _fmt_pct_cell(v):
+    return "N/A" if pd.isna(v) else fmt_pct(float(v))
+
+
 def format_growth(val):
     """Rast v % so SK desatinnou ciarkou. Pr.: 1.23 -> '+1,23 %'"""
     if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -2006,7 +2027,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v9"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v10"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -2598,10 +2619,10 @@ else:
                 "Burza": st.session_state.holdings_exchange.get(tkr) or "N/A",
                 "Stat": "N/A",
                 "Aktualna cena": "N/A",
-                "Rast 1M [%]": "N/A", "Rast 3M [%]": "N/A",
-                "Rast 6M [%]": "N/A", "Rast 1R [%]": "N/A",
-                "Rast 5R [%]": "N/A", "Rast 10R [%]": "N/A",
-                "Div.Rocne[%]": "N/A",
+                "Rast 1M [%]": float("nan"), "Rast 3M [%]": float("nan"),
+                "Rast 6M [%]": float("nan"), "Rast 1R [%]": float("nan"),
+                "Rast 5R [%]": float("nan"), "Rast 10R [%]": float("nan"),
+                "Div.Rocne[%]": float("nan"),
                 "Mnozstvo": format_qty(float(qty)),
             })
         else:
@@ -2615,13 +2636,13 @@ else:
                 "Burza": rec["exchange"],
                 "Stat": rec["country"],
                 "Aktualna cena": fmt_curr(rec["price"], rec["currency"], 2),
-                "Rast 1M [%]": format_growth(growth.get("1m")),
-                "Rast 3M [%]": format_growth(growth.get("3m")),
-                "Rast 6M [%]": format_growth(growth.get("6m")),
-                "Rast 1R [%]": format_growth(growth.get("1y")),
-                "Rast 5R [%]": format_growth(growth.get("5y")),
-                "Rast 10R [%]": format_growth(growth.get("10y")),
-                "Div.Rocne[%]": fmt_pct(pa),
+                "Rast 1M [%]": _num_or_nan(growth.get("1m")),
+                "Rast 3M [%]": _num_or_nan(growth.get("3m")),
+                "Rast 6M [%]": _num_or_nan(growth.get("6m")),
+                "Rast 1R [%]": _num_or_nan(growth.get("1y")),
+                "Rast 5R [%]": _num_or_nan(growth.get("5y")),
+                "Rast 10R [%]": _num_or_nan(growth.get("10y")),
+                "Div.Rocne[%]": _num_or_nan(pa),
                 "Mnozstvo": format_qty(float(qty)),
             })
 
@@ -2634,14 +2655,12 @@ else:
                "Rast 1R [%]", "Rast 5R [%]", "Rast 10R [%]"]
 
     def _style_g(val):
-        if not val or val == "N/A":
-            return ""
         try:
-            fv = float(
-                str(val).replace(" ", "").replace("%", "").replace(",", "."))
-            if fv > 0:
+            if pd.isna(val):
+                return ""
+            if val > 0:
                 return "color:#15a24a;font-weight:600;"
-            if fv < 0:
+            if val < 0:
                 return "color:#e0362b;font-weight:600;"
         except Exception:
             pass
@@ -2651,6 +2670,10 @@ else:
         styled_h = df_h.style.map(_style_g, subset=_gcols)
     except AttributeError:
         styled_h = df_h.style.applymap(_style_g, subset=_gcols)
+    # Zobrazenie (SK format, "N/A" pre chybajuce) je cisto vizualne -
+    # pod nim ostavaju cisla, takze zoradenie podla stlpca je spravne.
+    styled_h = styled_h.format(_fmt_growth_cell, subset=_gcols)
+    styled_h = styled_h.format(_fmt_pct_cell, subset=["Div.Rocne[%]"])
 
     if df_h.empty:
         st.info("Ziadna akcia nezodpoveda hladanemu textu.")
@@ -2665,22 +2688,15 @@ else:
         edited_h = st.data_editor(
             styled_h,
             column_config={
-                "Ticker":        st.column_config.TextColumn(disabled=True),
-                "Meno firmy":    st.column_config.TextColumn(disabled=True),
-                "Burza":         st.column_config.TextColumn(disabled=True),
-                "Stat":          st.column_config.TextColumn(disabled=True),
-                "Aktualna cena": st.column_config.TextColumn(disabled=True),
-                "Rast 1M [%]":   st.column_config.TextColumn(disabled=True),
-                "Rast 3M [%]":   st.column_config.TextColumn(disabled=True),
-                "Rast 6M [%]":   st.column_config.TextColumn(disabled=True),
-                "Rast 1R [%]":   st.column_config.TextColumn(disabled=True),
-                "Rast 5R [%]":   st.column_config.TextColumn(disabled=True),
-                "Rast 10R [%]":  st.column_config.TextColumn(disabled=True),
-                "Div.Rocne[%]":  st.column_config.TextColumn(disabled=True),
-                "Mnozstvo":      st.column_config.TextColumn(
+                "Mnozstvo": st.column_config.TextColumn(
                     help="Prepis mnozstvo (aj s desatinnou ciarkou). "
                          "Ulozi sa hned do Google Sheets. 0 = odstranit akciu."),
             },
+            disabled=[
+                "Ticker", "Meno firmy", "Burza", "Stat", "Aktualna cena",
+                "Rast 1M [%]", "Rast 3M [%]", "Rast 6M [%]", "Rast 1R [%]",
+                "Rast 5R [%]", "Rast 10R [%]", "Div.Rocne[%]",
+            ],
             hide_index=True,
             use_container_width=True,
             height=740,
