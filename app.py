@@ -352,7 +352,7 @@ BACKUP_COLUMNS = [
     "ExDivDate", "PayDivDate", "Frequency",
     "Growth1M", "Growth3M", "Growth6M", "Growth1Y", "Growth5Y", "Growth10Y",
     "UpdatedAt", "Source", "DivHistoryJSON",
-    "ManualPayDate", "ManualPayAmount",
+    "ManualPayDate", "ManualPayAmount", "DividendmaxUrl",
 ]
 FULL_SHEET_HEADER = GSHEET_HEADER + BACKUP_COLUMNS
 DIV_HISTORY_CAP = 60
@@ -414,16 +414,35 @@ def _merge_caches(a, b):
 
 
 def _manual_pay_cells(tkr):
-    """Hodnoty stlpcov ManualPayDate/ManualPayAmount pre ticker (rucne
-    zadany potvrdeny datum vyplaty z session_state['manual_pay'])."""
+    """Hodnoty stlpcov ManualPayDate/ManualPayAmount/DividendmaxUrl pre
+    ticker (z session_state['manual_pay'] a ['dmax_urls'])."""
     try:
         mp = st.session_state.get("manual_pay", {}).get(tkr)
+        url = st.session_state.get("dmax_urls", {}).get(tkr, "")
     except Exception:
-        mp = None
+        mp, url = None, ""
     if not mp or mp.get("date") is None:
-        return ["", ""]
+        return ["", "", url or ""]
     amt = mp.get("amount")
-    return [mp["date"].isoformat(), "" if amt is None else float(amt)]
+    return [mp["date"].isoformat(), "" if amt is None else float(amt), url or ""]
+
+
+def _read_dmax_urls(all_vals):
+    """Precita odkazy na dividendmax stranky z stlpca DividendmaxUrl."""
+    out = {}
+    if not all_vals:
+        return out
+    first_row = [str(c).strip().lower() for c in all_vals[0]]
+    data_rows = all_vals[1:] if "ticker" in first_row else all_vals
+    n = 3 + len(BACKUP_COLUMNS)
+    i_url = 3 + BACKUP_COLUMNS.index("DividendmaxUrl")
+    for row in data_rows:
+        row = list(row) + [""] * n
+        tkr = str(row[0]).strip().upper()
+        url = str(row[i_url]).strip()
+        if tkr and tkr not in ("TICKER", "SYMBOL") and url.startswith("http"):
+            out[tkr] = url
+    return out
 
 
 def _read_manual_pay(all_vals):
@@ -471,7 +490,7 @@ def _backup_row_for_ticker(tkr, cache):
     """
     entry = cache.get(tkr)
     if entry is None:
-        return [""] * (len(BACKUP_COLUMNS) - 2) + _manual_pay_cells(tkr)
+        return [""] * (len(BACKUP_COLUMNS) - 3) + _manual_pay_cells(tkr)
     rec = entry.get("rec") or {}
     g = rec.get("growth") or {}
     ex_d = rec.get("ex_div_date")
@@ -791,6 +810,7 @@ def load_holdings_and_backup():
                 }
             backup_cache = _read_backup_rows(all_vals)
             st.session_state["manual_pay"] = _read_manual_pay(all_vals)
+            st.session_state["dmax_urls"] = _read_dmax_urls(all_vals)
             return result, backup_cache
         except Exception as e:
             st.session_state["gsheet_status"] = {
@@ -1644,6 +1664,99 @@ MANUAL_PAY_SEED = {
     "DNLM.L": {"date": date(2026, 11, 17), "amount": 28.5},
 }
 
+DMAX_URL_SEED = {
+    "DNLM.L": "https://www.dividendmax.com/united-kingdom/london-stock-exchange/retailers/dunelm-group-plc/dividends",
+}
+
+
+def _parse_dividendmax_html(html_text, today, currency=""):
+    """
+    Z HTML stranky dividendmax.com ('.../dividends') vytiahne najblizsiu
+    uz OZNAMENU (status 'Declared') vyplatu s datumom vyplaty >= today.
+    Vrati {"date": datum_vyplaty, "ex": ex_div_datum, "amount": suma|None}
+    alebo None. Riadky tabulky sa citaju tolerantne (podla textu buniek),
+    nie podla pevnych poloh stlpcov. Ak je v ten isty den vyplat viac
+    (napr. riadna + specialna), sumy sa scitaju.
+    """
+    import re
+    import html as _html
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, flags=re.S | re.I)
+    found = []
+    for r in rows:
+        cells = [
+            _html.unescape(re.sub(r"<[^>]+>", " ", c)).strip()
+            for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, flags=re.S | re.I)
+        ]
+        cells = [re.sub(r"\s+", " ", c) for c in cells if c is not None]
+        if not any(c.lower().startswith("declared") for c in cells):
+            continue
+        text = " | ".join(cells)
+        dts = []
+        for m in re.finditer(r"(\d{1,2}) ([A-Za-z]{3}) (\d{4})", text):
+            try:
+                dts.append(datetime.strptime(m.group(0), "%d %b %Y").date())
+            except Exception:
+                pass
+        if len(dts) < 2:
+            continue
+        pay, ex = dts[-1], dts[-2]
+        amount = None
+        for c in reversed(cells):
+            mm = re.fullmatch(r"([£$€]?)\s*(\d+(?:[.,]\d+)?)\s*(p|c)?", c.replace(" ", ""))
+            if mm:
+                val = float(mm.group(2).replace(",", "."))
+                if mm.group(3) == "p" and currency == "GBp":
+                    amount = val
+                elif mm.group(3) is None and currency not in ("GBp",):
+                    amount = val
+                break
+        found.append({"date": pay, "ex": ex, "amount": amount})
+    future = [f for f in found if f["date"] >= today]
+    if not future:
+        return None
+    first = min(f["date"] for f in future)
+    same = [f for f in future if f["date"] == first]
+    amts = [f["amount"] for f in same]
+    amount = sum(amts) if amts and all(a is not None for a in amts) else None
+    return {"date": first, "ex": same[0]["ex"], "amount": amount}
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _fetch_dividendmax_cached(url, currency, today_iso):
+    resp = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/124.0 Safari/537.36",
+                 "Accept-Language": "en-GB,en;q=0.9"},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return _parse_dividendmax_html(
+        resp.text, date.fromisoformat(today_iso), currency)
+
+
+def fetch_dividendmax_pay(tkr, currency):
+    """Najblizsia oznamena vyplata z dividendmax pre ticker (alebo None).
+    Chyby sa ukladaju do session_state['_dmax_errors']."""
+    url = (st.session_state.get("dmax_urls", {}).get(tkr)
+           or DMAX_URL_SEED.get(tkr))
+    if not url:
+        return None
+    try:
+        res = _fetch_dividendmax_cached(
+            url, currency, datetime.now(timezone.utc).date().isoformat())
+        st.session_state.setdefault("_dmax_errors", {}).pop(tkr, None)
+        if res is None:
+            st.session_state.setdefault("_dmax_errors", {})[tkr] = (
+                "stranka nacitana, ale nenasla sa oznamena buduca vyplata")
+        return res
+    except Exception as e:
+        st.session_state.setdefault("_dmax_errors", {})[tkr] = (
+            type(e).__name__ + ": " + str(e)[:150])
+        return None
+
+
 
 def project_future_dividend_dates(rec, today, horizon_end, max_events=12):
     """
@@ -1883,6 +1996,8 @@ if "_sheet_backup_last_write_ts" not in st.session_state:
     st.session_state["_sheet_backup_last_write_ts"] = None
 if "manual_pay" not in st.session_state:
     st.session_state["manual_pay"] = {}
+if "dmax_urls" not in st.session_state:
+    st.session_state["dmax_urls"] = {}
 
 
 def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None):
@@ -2090,7 +2205,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v13"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v14"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -2985,6 +3100,11 @@ else:
             pay_date = _mp["date"]
             confirmed_pay = True
             _manual_amount = _mp.get("amount")
+        elif (_dm := fetch_dividendmax_pay(tkr, rec.get("currency", ""))) is not None:
+            # Oznamena vyplata z dividendmax (odkaz ulozeny pre ticker)
+            pay_date = _dm["date"]
+            confirmed_pay = True
+            _manual_amount = _dm.get("amount")
         elif confirmed_pay_date is not None and confirmed_pay_date >= today_pay:
             pay_date = confirmed_pay_date
             confirmed_pay = True
@@ -3136,6 +3256,49 @@ else:
                 st.session_state["manual_pay"].pop(_dg_tkr, None)
                 _force_write_stock_backup_to_sheet()
                 st.rerun()
+
+        st.markdown("**Automaticke nacitanie z dividendmax.com**")
+        st.caption(
+            "Najdi akciu na dividendmax.com (Google: 'dividendmax "
+            "nazov firmy'), skopiruj odkaz na jej stranku '.../dividends' "
+            "a vloz ho sem. Appka z nej odvtedy sama cita najblizsiu "
+            "OZNAMENU vyplatu (datum aj sumu) a zobrazi ju ako "
+            "'Potvrdene'. Odkaz staci zadat raz."
+        )
+        _cur_url = (st.session_state["dmax_urls"].get(_dg_tkr)
+                    or DMAX_URL_SEED.get(_dg_tkr) or "")
+        _url_in = st.text_input(
+            "Odkaz na dividendmax", value=_cur_url,
+            key="dmax_url_" + _dg_tkr,
+            placeholder="https://www.dividendmax.com/.../dividends",
+        ).strip()
+        _ub1, _ub2 = st.columns(2)
+        with _ub1:
+            if st.button("Ulozit odkaz", key="dmax_save_" + _dg_tkr):
+                if _url_in.startswith("http"):
+                    st.session_state["dmax_urls"][_dg_tkr] = _url_in
+                else:
+                    st.session_state["dmax_urls"].pop(_dg_tkr, None)
+                _fetch_dividendmax_cached.clear()
+                _force_write_stock_backup_to_sheet()
+                st.rerun()
+        with _ub2:
+            if st.button("Otestovat nacitanie", key="dmax_test_" + _dg_tkr):
+                _fetch_dividendmax_cached.clear()
+                _t = fetch_dividendmax_pay(_dg_tkr, _dg.get("currency", ""))
+                if _t is not None:
+                    st.success(
+                        "Nacitane: vyplata " + _t["date"].strftime("%d/%m/%Y")
+                        + ", ex-div " + _t["ex"].strftime("%d/%m/%Y")
+                        + ", suma " + (str(_t["amount"]) if _t["amount"]
+                                       is not None else "N/A (pouzije sa odhad)")
+                    )
+                else:
+                    st.error(
+                        "Nepodarilo sa: "
+                        + st.session_state.get("_dmax_errors", {}).get(
+                            _dg_tkr, "ziadny odkaz nie je ulozeny")
+                    )
 
 # ============================================================
 # SEKCIA 6 – HISTORIA VYPLATENYCH DIVIDEND (posledne roky)
