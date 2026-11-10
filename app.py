@@ -2027,7 +2027,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v10"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v11"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -2912,17 +2912,43 @@ else:
         if rec is None:
             continue
         confirmed_pay_date = rec.get("pay_div_date")
+        # Posledny uz PRESLY ex-div termin z historie vyplat. Ak ex-div
+        # uz prebehol, ale peniaze este neprisli, ide o "cakajucu vyplatu"
+        # (napr. ex-div 30.10., vyplata 12.11.). Povodna logika pozerala
+        # len na NASLEDUJUCI ex-div (o stvrtrok dalej), takze takato
+        # akcia v tabulke chybala, ak Yahoo nedal potvrdeny datum vyplaty.
+        _divs_p = rec.get("dividends_history")
+        _last_ex_p = None
+        if _divs_p is not None and len(_divs_p) > 0:
+            try:
+                _last_ex_p = _divs_p.index[-1].date()
+            except Exception:
+                _last_ex_p = None
+        _pending_amount = None
         if confirmed_pay_date is not None and confirmed_pay_date >= today_pay:
             pay_date = confirmed_pay_date
             confirmed_pay = True
         else:
-            ev = next_ex_event_by_ticker.get(tkr)
-            if ev is None:
-                continue
-            pay_date = ev["date"] + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE)
-            confirmed_pay = False
+            _pending_est = None
+            if (_last_ex_p is not None and _last_ex_p <= today_pay
+                    and (confirmed_pay_date is None
+                         or confirmed_pay_date < _last_ex_p)):
+                _pending_est = (
+                    _last_ex_p + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE))
+            if _pending_est is not None and _pending_est >= today_pay:
+                pay_date = _pending_est
+                confirmed_pay = False
+                _pending_amount = rec.get("last_div_amount")
+            else:
+                ev = next_ex_event_by_ticker.get(tkr)
+                if ev is None:
+                    continue
+                pay_date = ev["date"] + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE)
+                confirmed_pay = False
         price = rec["price"]
-        last_div = rec.get("next_expected_amount")
+        last_div = _pending_amount
+        if last_div is None:
+            last_div = rec.get("next_expected_amount")
         if last_div is None:
             last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
@@ -2991,6 +3017,40 @@ else:
             + "</tbody></table></div>",
             unsafe_allow_html=True,
         )
+
+    with st.expander("Preco v tejto tabulke chyba moja akcia?", expanded=False):
+        st.caption(
+            "Appka berie datum vyplaty z Yahoo Finance (pole 'dividendDate'). "
+            "Ak ho Yahoo pre akciu nema, datum sa odhadne z posledneho "
+            "ex-div + " + str(PAYOUT_LAG_DAYS_ESTIMATE) + " dni. Akcie s "
+            "dlhsim odstupom medzi ex-div a vyplatou (napr. UK) tak mozu "
+            "chybat. Vyber ticker a uvidis, co o nom Yahoo vratil."
+        )
+        _dg_tkr = st.selectbox(
+            "Ticker", sorted(st.session_state.holdings.keys()),
+            key="pay_diag_ticker",
+        )
+        _dg = stock_records.get(_dg_tkr)
+        if _dg is None:
+            st.warning("Pre " + _dg_tkr + " zatial nie su ziadne stiahnute data.")
+        else:
+            _dh = _dg.get("dividends_history")
+            _last3 = []
+            if _dh is not None and len(_dh) > 0:
+                for _ix, _vv in list(_dh.iloc[-3:].items()):
+                    _last3.append(
+                        str(pd.Timestamp(_ix).date()) + " (" + str(_vv) + ")")
+            st.write({
+                "Datum vyplaty z Yahoo (dividendDate)":
+                    str(_dg.get("pay_div_date")),
+                "Ex-div datum z Yahoo (exDividendDate)":
+                    str(_dg.get("ex_div_date")),
+                "Posledne ex-div z historie (suma)": ", ".join(_last3) or "N/A",
+                "Frekvencia": str(_dg.get("frequency")),
+                "Zobrazeny v tabulke vyssie":
+                    "ano" if any(r["ticker"] == _dg_tkr for r in pay_rows)
+                    else "nie",
+            })
 
 # ============================================================
 # SEKCIA 6 – HISTORIA VYPLATENYCH DIVIDEND (posledne roky)
