@@ -1633,6 +1633,17 @@ FREQ_INTERVAL_DAYS = {
 # (zvycajne cca 2-4 tyzdne pri US akciach).
 PAYOUT_LAG_DAYS_ESTIMATE = 21
 
+# Overene POTVRDENE datumy vyplat (z oznameni firiem / dividendmax,
+# AJ Bell, StockEvents k 10.11.2026), ktore Yahoo Finance neposkytuje.
+# Pouzivaju sa ako predvolene, kym neuplynie datum vyplaty; rucne zadany
+# datum v appke (sekcia Vyplacane dividendy) ma prednost. Sumy su na akciu
+# v mene akcie (DNLM.L v GBp).
+MANUAL_PAY_SEED = {
+    "BTI": {"date": date(2026, 11, 12), "amount": 0.834851},
+    "AKRBP.OL": {"date": date(2026, 11, 12), "amount": 6.15},
+    "DNLM.L": {"date": date(2026, 11, 17), "amount": 28.5},
+}
+
 
 def project_future_dividend_dates(rec, today, horizon_end, max_events=12):
     """
@@ -2079,7 +2090,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v12"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v13"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -2967,7 +2978,8 @@ else:
         # Rucne zadany POTVRDENY datum vyplaty (z vlastneho zdroja) ma
         # prednost pred Yahoo - Yahoo datum vyplaty pre niektore akcie
         # (napr. zahranicne, ADR) vobec neposkytuje.
-        _mp = st.session_state.get("manual_pay", {}).get(tkr)
+        _mp = (st.session_state.get("manual_pay", {}).get(tkr)
+               or MANUAL_PAY_SEED.get(tkr))
         _manual_amount = None
         if _mp and _mp.get("date") is not None and _mp["date"] >= today_pay:
             pay_date = _mp["date"]
