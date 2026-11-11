@@ -2158,6 +2158,7 @@ st.markdown(
     ".src-dmax{background:#e3f7ea;color:#1c9350;}"
     ".src-yahoo{background:#fff1dc;color:#b8630a;}"
     ".src-digrin{background:#f2e9fb;color:#7c3fc9;}"
+    ".src-odhad{background:#eceff1;color:#6b7280;}"
     ".growth-pos{color:#15a24a;font-weight:600;}"
     ".growth-neg{color:#e0362b;font-weight:600;}"
     ".section-note{font-size:15px;line-height:1.55;color:#5b6472;"
@@ -2440,7 +2441,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v20"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v21"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3307,10 +3308,12 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("#### Vyplacane dividendy")
 st.markdown(
-    "<div class=\"section-note\">Zobrazuju sa LEN potvrdene vyplaty "
-    "(oznamene firmou), najblizsich 30. Datumy sa automaticky nacitavaju z "
-    "dividendmax.com a digrin.com (a z Yahoo), raz denne, a ukladaju sa "
-    "trvalo (potvrdene datumy sa nepreverujuju znova, kym nepreidu). Stlpec Status ukazuje zdroj datumu: Dividendmax, Yahoo alebo Digrin.</div>",
+    "<div class=\"section-note\">Datumy vyplat sa automaticky nacitavaju z "
+    "dividendmax.com, digrin.com a Yahoo, ukladaju sa trvalo a potvrdene "
+    "datumy sa nepreverujuju znova, kym nepreidu. Stlpec Status ukazuje "
+    "zdroj datumu: Dividendmax, Yahoo alebo Digrin. Siva 'Odhad' = akcia "
+    "zatial nema potvrdeny datum; odhad je najblizsi Ex-Div termin + "
+    + str(PAYOUT_LAG_DAYS_ESTIMATE) + " dni.</div>",
     unsafe_allow_html=True,
 )
 
@@ -3325,7 +3328,14 @@ else:
         rec = stock_records.get(tkr)
         if rec is None:
             continue
-        for it in confirmed_pay_items(tkr, rec, today_pay):
+        _items = confirmed_pay_items(tkr, rec, today_pay)
+        if not _items:
+            _ev = next_ex_event_by_ticker.get(tkr)
+            if _ev is not None:
+                _items = [{
+                    "date": _ev["date"] + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE),
+                    "amount": None, "src": "odhad"}]
+        for it in _items:
             last_div = it["amount"]
             if last_div is None:
                 last_div = rec.get("next_expected_amount")
@@ -3349,7 +3359,9 @@ else:
         st.info("Zatial nie su nacitane ziadne potvrdene buduce vyplaty.")
     else:
         pay_rows.sort(key=lambda r: r["pay_date"])
-        pay_rows = pay_rows[:30]
+        _pay_total = len(pay_rows)
+        _pay_lim = st.session_state.get("pay_rows_limit", 30)
+        pay_rows = pay_rows[:_pay_lim]
         pay_row_parts = []
         for r in pay_rows:
             pct_annual_str = fmt_pct(r["pct_annual"])
@@ -3368,6 +3380,7 @@ else:
                 "dividendmax": ("src-dmax", "Dividendmax"),
                 "yahoo": ("src-yahoo", "Yahoo"),
                 "digrin": ("src-digrin", "Digrin"),
+                "odhad": ("src-odhad", "Odhad"),
             }.get(r["src"], ("src-dmax", str(r["src"])))
             status_html = ("<span class=\"freq-badge " + _src_cls + "\">"
                            + _src_txt + "</span>")
@@ -3395,6 +3408,19 @@ else:
             + "</tbody></table></div>",
             unsafe_allow_html=True,
         )
+        _mb1, _mb2, _mb3 = st.columns([1, 1, 4])
+        with _mb1:
+            if _pay_total > _pay_lim and st.button(
+                    "Zobrazit viac", key="pay_more"):
+                st.session_state["pay_rows_limit"] = _pay_lim + 30
+                st.rerun()
+        with _mb2:
+            if _pay_lim > 30 and st.button("Zobrazit menej", key="pay_less"):
+                st.session_state["pay_rows_limit"] = 30
+                st.rerun()
+        with _mb3:
+            st.caption("Zobrazene " + str(min(_pay_lim, _pay_total))
+                       + " z " + str(_pay_total) + " vyplat.")
 
     # Stav nacitavania - pre kontrolu, bez nutnosti prechadzat akcie
     _ps = _pay_store_get()
