@@ -352,7 +352,7 @@ BACKUP_COLUMNS = [
     "ExDivDate", "PayDivDate", "Frequency",
     "Growth1M", "Growth3M", "Growth6M", "Growth1Y", "Growth5Y", "Growth10Y",
     "UpdatedAt", "Source", "DivHistoryJSON",
-    "ManualPayDate", "ManualPayAmount", "DividendmaxUrl",
+    "ManualPayDate", "ManualPayAmount",
 ]
 FULL_SHEET_HEADER = GSHEET_HEADER + BACKUP_COLUMNS
 DIV_HISTORY_CAP = 60
@@ -414,35 +414,16 @@ def _merge_caches(a, b):
 
 
 def _manual_pay_cells(tkr):
-    """Hodnoty stlpcov ManualPayDate/ManualPayAmount/DividendmaxUrl pre
-    ticker (z session_state['manual_pay'] a ['dmax_urls'])."""
+    """Hodnoty stlpcov ManualPayDate/ManualPayAmount pre ticker (rucne
+    zadany potvrdeny datum vyplaty z session_state['manual_pay'])."""
     try:
         mp = st.session_state.get("manual_pay", {}).get(tkr)
-        url = st.session_state.get("dmax_urls", {}).get(tkr, "")
     except Exception:
-        mp, url = None, ""
+        mp = None
     if not mp or mp.get("date") is None:
-        return ["", "", url or ""]
+        return ["", ""]
     amt = mp.get("amount")
-    return [mp["date"].isoformat(), "" if amt is None else float(amt), url or ""]
-
-
-def _read_dmax_urls(all_vals):
-    """Precita odkazy na dividendmax stranky z stlpca DividendmaxUrl."""
-    out = {}
-    if not all_vals:
-        return out
-    first_row = [str(c).strip().lower() for c in all_vals[0]]
-    data_rows = all_vals[1:] if "ticker" in first_row else all_vals
-    n = 3 + len(BACKUP_COLUMNS)
-    i_url = 3 + BACKUP_COLUMNS.index("DividendmaxUrl")
-    for row in data_rows:
-        row = list(row) + [""] * n
-        tkr = str(row[0]).strip().upper()
-        url = str(row[i_url]).strip()
-        if tkr and tkr not in ("TICKER", "SYMBOL") and url.startswith("http"):
-            out[tkr] = url
-    return out
+    return [mp["date"].isoformat(), "" if amt is None else float(amt)]
 
 
 def _read_manual_pay(all_vals):
@@ -490,7 +471,7 @@ def _backup_row_for_ticker(tkr, cache):
     """
     entry = cache.get(tkr)
     if entry is None:
-        return [""] * (len(BACKUP_COLUMNS) - 3) + _manual_pay_cells(tkr)
+        return [""] * (len(BACKUP_COLUMNS) - 2) + _manual_pay_cells(tkr)
     rec = entry.get("rec") or {}
     g = rec.get("growth") or {}
     ex_d = rec.get("ex_div_date")
@@ -810,7 +791,6 @@ def load_holdings_and_backup():
                 }
             backup_cache = _read_backup_rows(all_vals)
             st.session_state["manual_pay"] = _read_manual_pay(all_vals)
-            st.session_state["dmax_urls"] = _read_dmax_urls(all_vals)
             return result, backup_cache
         except Exception as e:
             st.session_state["gsheet_status"] = {
@@ -1653,280 +1633,16 @@ FREQ_INTERVAL_DAYS = {
 # (zvycajne cca 2-4 tyzdne pri US akciach).
 PAYOUT_LAG_DAYS_ESTIMATE = 21
 
-# Posledna zaloha: povodne overene datumy. Pouzivaju sa az AKO POSLEDNA
-# moznost (po rucnom zadani, dividendmax, digrin a Yahoo), len kym
-# nepretecie datum vyplaty. Primarne sa datumy citaju z webu.
+# Overene POTVRDENE datumy vyplat (z oznameni firiem / dividendmax,
+# AJ Bell, StockEvents k 10.11.2026), ktore Yahoo Finance neposkytuje.
+# Pouzivaju sa ako predvolene, kym neuplynie datum vyplaty; rucne zadany
+# datum v appke (sekcia Vyplacane dividendy) ma prednost. Sumy su na akciu
+# v mene akcie (DNLM.L v GBp).
 MANUAL_PAY_SEED = {
     "BTI": {"date": date(2026, 11, 12), "amount": 0.834851},
     "AKRBP.OL": {"date": date(2026, 11, 12), "amount": 6.15},
     "DNLM.L": {"date": date(2026, 11, 17), "amount": 28.5},
 }
-
-DMAX_URL_SEED = {
-    "DNLM.L": "https://www.dividendmax.com/united-kingdom/london-stock-exchange/retailers/dunelm-group-plc/dividends",
-}
-
-_WEB_HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                   "Chrome/124.0 Safari/537.36"),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-GB,en;q=0.9",
-}
-
-
-def _html_to_text(html_text):
-    """HTML -> jeden riadok textu, bunky/znacky oddelene ' | '. Nezavisle od
-    toho, ci stranka pouziva <table>, <div> alebo ine znacky."""
-    import re
-    import html as _html
-    t = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", html_text)
-    t = re.sub(r"(?s)<!--.*?-->", " ", t)
-    t = re.sub(r"(?s)<[^>]+>", " | ", t)
-    t = _html.unescape(t)
-    t = re.sub(r"\s+", " ", t)
-    t = re.sub(r"(?:\s*\|\s*)+", " | ", t)
-    return t
-
-
-def _amount_in_currency(value, unit, currency):
-    """Prepocet sumy z webu (unit: 'p', 'c', '£', '$', '€', ISO kod alebo '')
-    na menu akcie z Yahoo ('currency', napr. GBp, GBP, USD, NOK).
-    Ak sa jednotky neda spolahlivo previest, vrati None."""
-    u = (unit or "").strip()
-    if u == "p":
-        if currency == "GBp":
-            return value
-        if currency == "GBP":
-            return value / 100.0
-        return None
-    if u == "c":
-        if currency in ("GBp",):
-            return None
-        return value / 100.0
-    if u == "£" or u == "GBP":
-        return value * 100.0 if currency == "GBp" else (
-            value if currency in ("GBP", "") else None)
-    if u in ("GBp", "GBX"):
-        return value if currency == "GBp" else (
-            value / 100.0 if currency == "GBP" else None)
-    if u in ("$", "USD"):
-        return value if currency in ("USD", "") else None
-    if u in ("€", "EUR"):
-        return value if currency in ("EUR", "") else None
-    if u == "":
-        return value
-    return value if u.upper() == (currency or "").upper() else None
-
-
-def _parse_dividendmax_html(html_text, today, currency=""):
-    """
-    Z HTML stranky dividendmax.com ('.../dividends') vytiahne najblizsiu
-    uz OZNAMENU (status 'Declared') vyplatu s datumom vyplaty >= today.
-    Vrati {"date": datum_vyplaty, "ex": ex_div_datum, "amount": suma|None}
-    alebo None. Cita sa ako TEXT stranky (nie podla pevnych stlpcov):
-    kazdy usek zacinajuci slovom 'Declared' po dalsi status (Forecast,
-    Paid, ...) je jeden riadok; z neho sa vezmu POSLEDNE dva datumy
-    'DD Mon YYYY' (ex-div, vyplata) a suma ('26.5c', '28.5p', '$0.26').
-    Ak je v ten isty den vyplat viac, sumy sa scitaju.
-    """
-    import re
-    text = _html_to_text(html_text)
-    status_re = re.compile(
-        r"\b(Declared|Forecast|Paid|Historic\w*|Estimated|Projected)\b\s*\|")
-    marks = list(status_re.finditer(text))
-    date_re = re.compile(r"\b(\d{1,2}) ([A-Za-z]{3}) (\d{4})\b")
-    found = []
-    for i, m in enumerate(marks):
-        if m.group(1) != "Declared":
-            continue
-        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
-        seg = text[m.start():min(end, m.start() + 400)]
-        dts = []
-        last_end = 0
-        for dm in date_re.finditer(seg):
-            try:
-                dts.append(datetime.strptime(dm.group(0), "%d %b %Y").date())
-                last_end = dm.end()
-            except Exception:
-                pass
-        if len(dts) < 2:
-            continue
-        pay, ex = dts[-1], dts[-2]
-        tail = seg[last_end:]
-        amount = None
-        am = re.search(r"(?<![\d.])(\d+(?:[.,]\d+)?)\s*([pc])(?![A-Za-z])", tail)
-        if am:
-            amount = _amount_in_currency(
-                float(am.group(1).replace(",", ".")), am.group(2), currency)
-        else:
-            am = re.search(r"([£$€])\s*(\d+(?:[.,]\d+)?)", tail)
-            if am:
-                amount = _amount_in_currency(
-                    float(am.group(2).replace(",", ".")), am.group(1), currency)
-        found.append({"date": pay, "ex": ex, "amount": amount})
-    future = [f for f in found if f["date"] >= today]
-    if not future:
-        return None
-    first = min(f["date"] for f in future)
-    same = [f for f in future if f["date"] == first]
-    amts = [f["amount"] for f in same]
-    amount = sum(amts) if amts and all(a is not None for a in amts) else None
-    return {"date": first, "ex": same[0]["ex"], "amount": amount}
-
-
-def _parse_digrin_html(html_text, today, currency=""):
-    """
-    Z HTML stranky digrin.com/stocks/detail/<TICKER>/ vytiahne najblizsiu
-    vyplatu s datumom vyplaty >= today z tabulky 'Ex-dividend date |
-    Payable date | Dividend amount' (datumy YYYY-MM-DD). Vrati
-    {"date","ex","amount"} alebo None. Digrin neodlisuje vzdy oznamene a
-    odhadnute vyplaty, preto appka tento zdroj znaci osobitne ('Digrin').
-    """
-    import re
-    text = _html_to_text(html_text)
-    row_re = re.compile(
-        r"(\d{4}-\d{2}-\d{2})[\s|]+(\d{4}-\d{2}-\d{2})[\s|]+"
-        r"(\d+(?:\.\d+)?)\s*([A-Za-z]{3})?")
-    rows = []
-    for m in row_re.finditer(text):
-        try:
-            ex = date.fromisoformat(m.group(1))
-            pay = date.fromisoformat(m.group(2))
-        except Exception:
-            continue
-        if pay < ex:
-            continue
-        rows.append({
-            "ex": ex, "date": pay,
-            "amount": _amount_in_currency(
-                float(m.group(3)), m.group(4) or "", currency),
-        })
-    future = [r for r in rows if r["date"] >= today]
-    if not future:
-        return None
-    first = min(future, key=lambda r: r["date"])
-    return {"date": first["date"], "ex": first["ex"], "amount": first["amount"]}
-
-
-def _page_diag(html_text):
-    """Kratky popis stiahnutej stranky pre diagnostiku."""
-    import re
-    text = _html_to_text(html_text)
-    n_decl = len(re.findall(r"\bDeclared\b\s*\|", text))
-    n_iso = len(re.findall(r"\d{4}-\d{2}-\d{2}", text))
-    n_dm = len(re.findall(r"\b\d{1,2} [A-Za-z]{3} \d{4}\b", text))
-    return ("stranka " + str(len(html_text)) + " znakov; 'Declared' riadkov: "
-            + str(n_decl) + "; datumov DD Mon YYYY: " + str(n_dm)
-            + "; datumov YYYY-MM-DD: " + str(n_iso))
-
-
-@st.cache_resource
-def _web_store():
-    """Zdielana cache nacitanych web stranok (data + nedavne chyby)."""
-    return {"data": {}, "fail": {}}
-
-
-def _web_cache_clear():
-    s = _web_store()
-    s["data"].clear()
-    s["fail"].clear()
-
-
-def _web_get(url, key, parser, force=False,
-             ttl_ok=6 * 3600, ttl_fail=1800):
-    """Stiahne stranku a spracuje ju 'parserom'. Vrati (vysledok, diag).
-    Uspech sa drzi 6 h, CHYBA 30 min (aby appka pri vypadku nehamerovala
-    web pri kazdom prekresleni). Bezpecne aj z vlakien."""
-    store = _web_store()
-    now = time.time()
-    if not force:
-        d = store["data"].get(key)
-        if d and now - d[0] < ttl_ok:
-            return d[1], d[2]
-        f = store["fail"].get(key)
-        if f and now - f[0] < ttl_fail:
-            return None, f[1]
-    try:
-        resp = requests.get(url, headers=_WEB_HEADERS, timeout=15)
-        if resp.status_code != 200:
-            raise RuntimeError("HTTP " + str(resp.status_code) + " z " + url)
-        res = parser(resp.text)
-        diag = _page_diag(resp.text)
-        store["data"][key] = (now, res, diag)
-        store["fail"].pop(key, None)
-        return res, diag
-    except Exception as e:
-        msg = type(e).__name__ + ": " + str(e)[:160]
-        store["fail"][key] = (now, msg)
-        return None, msg
-
-
-def fetch_dividendmax_pay(tkr, currency, force=False):
-    """Najblizsia oznamena vyplata z dividendmax pre ticker (alebo None).
-    Chyby/diagnostika sa ukladaju do session_state['_dmax_errors']."""
-    url = (st.session_state.get("dmax_urls", {}).get(tkr)
-           or DMAX_URL_SEED.get(tkr))
-    if not url:
-        return None
-    today = datetime.now(timezone.utc).date()
-    res, diag = _web_get(
-        url, ("dmax", url, currency, today.isoformat()),
-        lambda h: _parse_dividendmax_html(h, today, currency), force=force)
-    errs = st.session_state.setdefault("_dmax_errors", {})
-    if res is None:
-        errs[tkr] = ("nenasla sa oznamena buduca vyplata (" + diag + ")")
-    else:
-        errs.pop(tkr, None)
-    return res
-
-
-def _digrin_url(tkr):
-    from urllib.parse import quote
-    return "https://www.digrin.com/stocks/detail/" + quote(tkr) + "/"
-
-
-def fetch_digrin_pay(tkr, currency, force=False, cached_only=False):
-    """Najblizsia vyplata z digrin.com (URL sa odvodi z tickera) alebo None.
-    Vrati (vysledok, diag)."""
-    today = datetime.now(timezone.utc).date()
-    key = ("digrin", tkr, currency, today.isoformat())
-    if cached_only:
-        d = _web_store()["data"].get(key)
-        if d and time.time() - d[0] < 6 * 3600:
-            return d[1], d[2]
-        return None, ""
-    return _web_get(
-        _digrin_url(tkr), key,
-        lambda h: _parse_digrin_html(h, today, currency), force=force)
-
-
-def prefetch_digrin(cands, max_new=80):
-    """Paralelne (6 vlakien) docita digrin pre zoznam [(ticker, mena)].
-    Zastavi sa, ak prvych 6 pokusov zlyha (napr. blokovanie servera)."""
-    from concurrent.futures import ThreadPoolExecutor
-    today = datetime.now(timezone.utc).date()
-    store = _web_store()
-    now = time.time()
-    todo = []
-    for tkr, cur in cands:
-        key = ("digrin", tkr, cur, today.isoformat())
-        d = store["data"].get(key)
-        f = store["fail"].get(key)
-        if (d and now - d[0] < 6 * 3600) or (f and now - f[0] < 1800):
-            continue
-        todo.append((tkr, cur))
-    todo = todo[:max_new]
-    ok_any = False
-    for i in range(0, len(todo), 6):
-        chunk = todo[i:i + 6]
-        with ThreadPoolExecutor(max_workers=6) as ex:
-            results = list(ex.map(lambda tc: fetch_digrin_pay(*tc), chunk))
-        if any(r[0] is not None or r[1].startswith("stranka") for r in results):
-            ok_any = True
-        if not ok_any and i == 0:
-            break
-
 
 
 def project_future_dividend_dates(rec, today, horizon_end, max_events=12):
@@ -2167,8 +1883,6 @@ if "_sheet_backup_last_write_ts" not in st.session_state:
     st.session_state["_sheet_backup_last_write_ts"] = None
 if "manual_pay" not in st.session_state:
     st.session_state["manual_pay"] = {}
-if "dmax_urls" not in st.session_state:
-    st.session_state["dmax_urls"] = {}
 
 
 def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None):
@@ -2376,7 +2090,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v17"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v13"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3247,10 +2961,7 @@ st.markdown(
     "buduci datum vyplaty, datum je ODHADNUTY ako najblizsi (potvrdeny "
     "alebo odhadnuty) Ex-Div termin + priblizny bezny odstup "
     + str(PAYOUT_LAG_DAYS_ESTIMATE) + " dni - oznacene znackou 'Odhad'. "
-    "Skutocny datum vyplaty sa moze lisit. 'Potvrdene' = datum z Yahoo, "
-    "dividendmax (oznamena vyplata) alebo rucne zadany; 'Digrin' = datum "
-    "automaticky nacitany z digrin.com (moze zahrnat aj odhad)."
-    "</div>",
+    "Skutocny datum vyplaty sa moze lisit.</div>",
     unsafe_allow_html=True,
 )
 
@@ -3259,95 +2970,30 @@ if not st.session_state.holdings:
 else:
     today_pay = datetime.now(timezone.utc).date()
     pay_rows = []
-    _pending_unknown = []
-
-    # Kandidati na automaticke citanie z digrin: akcie, ktore maju ex-div
-    # krátko po nás alebo nedavno za sebou (vyplata este moze cakat) a
-    # nemaju potvrdeny datum od Yahoo ani od dividendmax.
-    _dg_cands = []
-    for _t, _q in st.session_state.holdings.items():
-        _r = stock_records.get(_t)
-        if _r is None:
-            continue
-        if (_r.get("pay_div_date") is not None
-                and _r["pay_div_date"] >= today_pay):
-            continue
-        if st.session_state.get("manual_pay", {}).get(_t):
-            continue
-        _near = False
-        _nx = _r.get("ex_div_date")
-        if _nx is not None and today_pay <= _nx <= today_pay + timedelta(days=60):
-            _near = True
-        _h = _r.get("dividends_history")
-        if _h is None or len(_h) == 0:
-            _near = True   # bez historie nevieme okno posudit - skusit digrin
-        try:
-            if _h is not None and len(_h) > 0:
-                _lx = _h.index[-1].date()
-                if today_pay - timedelta(days=75) <= _lx <= today_pay:
-                    _near = True
-        except Exception:
-            pass
-        if _near:
-            _dg_cands.append((_t, _r.get("currency", "")))
-    if _dg_cands:
-        prefetch_digrin(_dg_cands)
-
     for tkr, qty in st.session_state.holdings.items():
         rec = stock_records.get(tkr)
         if rec is None:
             continue
         confirmed_pay_date = rec.get("pay_div_date")
-        # Poradie zdrojov: 1) rucne zadany datum, 2) dividendmax (odkaz
-        # ulozeny pre ticker), 3) Yahoo, 4) digrin (odkaz sa odvodi z
-        # tickera), 5) zalozny zoznam MANUAL_PAY_SEED, 6) odhad.
-        _mp = st.session_state.get("manual_pay", {}).get(tkr)
+        # Rucne zadany POTVRDENY datum vyplaty (z vlastneho zdroja) ma
+        # prednost pred Yahoo - Yahoo datum vyplaty pre niektore akcie
+        # (napr. zahranicne, ADR) vobec neposkytuje.
+        _mp = (st.session_state.get("manual_pay", {}).get(tkr)
+               or MANUAL_PAY_SEED.get(tkr))
         _manual_amount = None
-        pay_source = "odhad"
-        _dm = None
-        _dg = None
-        if not (_mp and _mp.get("date") is not None and _mp["date"] >= today_pay):
-            _dm = fetch_dividendmax_pay(tkr, rec.get("currency", ""))
-            if _dm is None and not (
-                    confirmed_pay_date is not None
-                    and confirmed_pay_date >= today_pay):
-                _dg = fetch_digrin_pay(
-                    tkr, rec.get("currency", ""), cached_only=True)[0]
-        _seed = MANUAL_PAY_SEED.get(tkr)
         if _mp and _mp.get("date") is not None and _mp["date"] >= today_pay:
             pay_date = _mp["date"]
-            pay_source = "potvrdene"
+            confirmed_pay = True
             _manual_amount = _mp.get("amount")
-        elif _dm is not None:
-            pay_date = _dm["date"]
-            pay_source = "potvrdene"
-            _manual_amount = _dm.get("amount")
         elif confirmed_pay_date is not None and confirmed_pay_date >= today_pay:
             pay_date = confirmed_pay_date
-            pay_source = "potvrdene"
-        elif _dg is not None:
-            pay_date = _dg["date"]
-            pay_source = "digrin"
-            _manual_amount = _dg.get("amount")
-        elif _seed and _seed["date"] >= today_pay:
-            pay_date = _seed["date"]
-            pay_source = "potvrdene"
-            _manual_amount = _seed.get("amount")
+            confirmed_pay = True
         else:
             ev = next_ex_event_by_ticker.get(tkr)
             if ev is None:
                 continue
             pay_date = ev["date"] + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE)
-        confirmed_pay = pay_source == "potvrdene"
-        if pay_source == "odhad":
-            try:
-                _hh = rec.get("dividends_history")
-                if _hh is not None and len(_hh) > 0:
-                    _lx2 = _hh.index[-1].date()
-                    if today_pay - timedelta(days=60) <= _lx2 <= today_pay:
-                        _pending_unknown.append((tkr, _lx2))
-            except Exception:
-                pass
+            confirmed_pay = False
         price = rec["price"]
         last_div = _manual_amount
         if last_div is None:
@@ -3363,7 +3009,7 @@ else:
         pay_rows.append({
             "ticker": tkr, "name": rec["name"],
             "qty": float(qty), "pay_date": pay_date,
-            "confirmed": confirmed_pay, "source": pay_source,
+            "confirmed": confirmed_pay,
             "frequency": rec["frequency"], "pct_annual": pct_annual,
             "last_div": last_div, "total_div": total_div,
             "currency": currency,
@@ -3376,9 +3022,7 @@ else:
         )
     else:
         pay_rows.sort(key=lambda r: r["pay_date"])
-        _lim = today_pay + timedelta(days=60)
-        _within = [r for r in pay_rows if r["pay_date"] <= _lim]
-        pay_rows = (_within if len(_within) >= 30 else pay_rows[:30])[:80]
+        pay_rows = pay_rows[:30]
         pay_row_parts = []
         for r in pay_rows:
             pct_annual_str = fmt_pct(r["pct_annual"])
@@ -3393,15 +3037,11 @@ else:
                                           + fmt_num(r["total_div"] * r3, 2) + ")")
             else:
                 total_div_str = "N/A"
-            if r["source"] == "potvrdene":
-                status_html = ("<span class=\"freq-badge freq-monthly\">"
-                               "Potvrdene</span>")
-            elif r["source"] == "digrin":
-                status_html = ("<span class=\"freq-badge freq-yearly\">"
-                               "Digrin</span>")
-            else:
-                status_html = ("<span class=\"freq-badge freq-quarterly\">"
-                               "Odhad</span>")
+            status_html = (
+                "<span class=\"freq-badge freq-monthly\">Potvrdene</span>"
+                if r["confirmed"] else
+                "<span class=\"freq-badge freq-quarterly\">Odhad</span>"
+            )
             pay_row_parts.append(
                 "<tr>"
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>"
@@ -3426,33 +3066,6 @@ else:
             + "</tbody></table></div>",
             unsafe_allow_html=True,
         )
-
-    # --- Stav automatickych zdrojov a akcie bez zistenej vyplaty ---
-    if _pending_unknown:
-        st.warning(
-            "Ex-div uz bolo, ale datum vyplaty sa NEPODARILO zistit "
-            "(z Yahoo, dividendmax ani digrin): "
-            + ", ".join(t + " (ex " + d.strftime("%d/%m") + ")"
-                        for t, d in sorted(_pending_unknown, key=lambda x: x[1]))
-            + ". Tieto akcie v tabulke vyssie nemaju svoju najblizsiu "
-            "vyplatu - skus ich v rozbalovaci nizsie."
-        )
-    _ws = _web_store()
-    _dg_ok = sum(1 for k in _ws["data"] if k[0] == "digrin")
-    _dg_bad = {k[1]: v[1] for k, v in _ws["fail"].items() if k[0] == "digrin"}
-    _dm_bad = dict(st.session_state.get("_dmax_errors", {}))
-    _parts = ["digrin: " + str(_dg_ok) + " nacitanych, "
-              + str(len(_dg_bad)) + " zlyhalo"]
-    _n_dm_urls = len(st.session_state.get("dmax_urls", {}))
-    _parts.append("dividendmax: " + str(_n_dm_urls) + " ulozenych odkazov, "
-                  + str(len(_dm_bad)) + " bez vysledku")
-    st.caption("Zdroje datumov vyplat - " + "; ".join(_parts))
-    if _dg_bad or _dm_bad:
-        with st.expander("Chyby automatickeho nacitania", expanded=False):
-            for _k, _v in list(_dm_bad.items())[:30]:
-                st.write("dividendmax " + _k + ": " + str(_v))
-            for _k, _v in list(_dg_bad.items())[:30]:
-                st.write("digrin " + _k + ": " + str(_v))
 
     with st.expander("Preco v tejto tabulke chyba moja akcia?", expanded=False):
         st.caption(
@@ -3523,60 +3136,6 @@ else:
                 st.session_state["manual_pay"].pop(_dg_tkr, None)
                 _force_write_stock_backup_to_sheet()
                 st.rerun()
-
-        st.markdown("**Automaticke nacitanie z dividendmax.com**")
-        st.caption(
-            "Najdi akciu na dividendmax.com (Google: 'dividendmax "
-            "nazov firmy'), skopiruj odkaz na jej stranku '.../dividends' "
-            "a vloz ho sem. Appka z nej odvtedy sama cita najblizsiu "
-            "OZNAMENU vyplatu (datum aj sumu) a zobrazi ju ako "
-            "'Potvrdene'. Odkaz staci zadat raz."
-        )
-        _cur_url = (st.session_state["dmax_urls"].get(_dg_tkr)
-                    or DMAX_URL_SEED.get(_dg_tkr) or "")
-        _url_in = st.text_input(
-            "Odkaz na dividendmax", value=_cur_url,
-            key="dmax_url_" + _dg_tkr,
-            placeholder="https://www.dividendmax.com/.../dividends",
-        ).strip()
-        _ub1, _ub2 = st.columns(2)
-        with _ub1:
-            if st.button("Ulozit odkaz", key="dmax_save_" + _dg_tkr):
-                if _url_in.startswith("http"):
-                    st.session_state["dmax_urls"][_dg_tkr] = _url_in
-                else:
-                    st.session_state["dmax_urls"].pop(_dg_tkr, None)
-                _web_cache_clear()
-                _force_write_stock_backup_to_sheet()
-                st.rerun()
-        with _ub2:
-            if st.button("Otestovat nacitanie", key="dmax_test_" + _dg_tkr):
-                _web_cache_clear()
-                _cur_t = (_dg or {}).get("currency", "")
-                _t = fetch_dividendmax_pay(_dg_tkr, _cur_t, force=True)
-                if _t is not None:
-                    st.success(
-                        "dividendmax: vyplata " + _t["date"].strftime("%d/%m/%Y")
-                        + ", ex-div " + _t["ex"].strftime("%d/%m/%Y")
-                        + ", suma " + (str(_t["amount"]) if _t["amount"]
-                                       is not None else "N/A (pouzije sa odhad)")
-                    )
-                else:
-                    st.error(
-                        "dividendmax: nepodarilo sa - "
-                        + st.session_state.get("_dmax_errors", {}).get(
-                            _dg_tkr, "ziadny odkaz nie je ulozeny")
-                    )
-                _g, _gd = fetch_digrin_pay(_dg_tkr, _cur_t, force=True)
-                if _g is not None:
-                    st.success(
-                        "digrin: vyplata " + _g["date"].strftime("%d/%m/%Y")
-                        + ", ex-div " + _g["ex"].strftime("%d/%m/%Y")
-                        + ", suma " + (str(_g["amount"]) if _g["amount"]
-                                       is not None else "N/A (pouzije sa odhad)")
-                    )
-                else:
-                    st.error("digrin: nepodarilo sa - " + str(_gd))
 
 # ============================================================
 # SEKCIA 6 – HISTORIA VYPLATENYCH DIVIDEND (posledne roky)
