@@ -2044,6 +2044,231 @@ def confirmed_pay_items(tkr, rec, today):
     return out
 
 
+# ── Evidencia SKUTOCNE prijatych dividend (zapisuje sa do Google Sheets) ────
+#
+# Ked uz je znamy ex-div datum a potvrdeny datum vyplaty, appka v tom
+# okamihu zapise riadok: kolko akcii MAS (pocet ku ex-div datumu - na tom
+# zavisi narok) x suma na akciu. Riadok sa zapise raz (kluc ticker+datum
+# vyplaty) a uz sa neprepisuje, takze neskorsie nakupy zaznam nezmenia.
+# Zapisuje sa do listu 'Payouts' v tom istom Google Sheete (a zalozne do
+# suboru). Zaznamy mozes upravovat/pridavat aj v appke aj priamo v Sheete.
+
+PAYOUT_SHEET_TITLE = "Payouts"
+PAYOUT_FILE = Path(__file__).resolve().parent / "payouts_ledger.json"
+PAYOUT_HEADER = ["PayDate", "ExDate", "Ticker", "Qty", "PerShare",
+                 "Currency", "Total", "FX_USD", "Source", "Recorded"]
+PAYOUT_RELOAD_SECONDS = 300
+
+
+def _to_float(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = str(v).replace("\xa0", "").replace(" ", "").strip()
+    if not t:
+        return None
+    if "," in t and "." in t:
+        t = t.replace(",", "")
+    else:
+        t = t.replace(",", ".")
+    try:
+        return float(t)
+    except Exception:
+        return None
+
+
+def _to_date(v):
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    t = str(v).strip().lstrip("'")
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d. %m. %Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(t, fmt).date()
+        except Exception:
+            pass
+    return None
+
+
+def _payout_ws():
+    """List 'Payouts' v tom istom zosite (vytvori sa, ak chyba). Ak hlavny
+    list nema hlavicku, nevytvara sa a pouziva sa len lokalny subor."""
+    ws, info = _connect_gsheet()
+    if ws is None or not info.get("has_header"):
+        return None
+    sh = ws.spreadsheet
+    try:
+        return sh.worksheet(PAYOUT_SHEET_TITLE)
+    except Exception:
+        try:
+            w = sh.add_worksheet(title=PAYOUT_SHEET_TITLE, rows=500,
+                                 cols=len(PAYOUT_HEADER))
+            w.update([PAYOUT_HEADER], value_input_option="RAW")
+            return w
+        except Exception:
+            return None
+
+
+def _payout_row_to_dict(row):
+    row = list(row) + [""] * (len(PAYOUT_HEADER) - len(row))
+    pay = _to_date(row[0])
+    tkr = str(row[2]).strip()
+    qty = _to_float(row[3])
+    per = _to_float(row[4])
+    if pay is None or not tkr or qty is None or per is None:
+        return None
+    return {
+        "pay": pay, "ex": _to_date(row[1]) if str(row[1]).strip() else None,
+        "ticker": tkr, "qty": qty, "per_share": per,
+        "currency": str(row[5]).strip(), "fx": _to_float(row[7]),
+        "source": str(row[8]).strip(), "recorded": str(row[9]).strip(),
+    }
+
+
+def _payout_dict_to_row(r, sheet=True):
+    """Riadok pre Sheets: datumy ako text ('), Total ako vzorec, ktory sa
+    pocita sam (Qty x PerShare), aby sa dal upravovat priamo v Sheete."""
+    pre = "'" if sheet else ""
+    return [
+        pre + r["pay"].isoformat(),
+        (pre + r["ex"].isoformat()) if r.get("ex") else "",
+        r["ticker"], r["qty"], r["per_share"], r.get("currency", ""),
+        ('=INDIRECT("D"&ROW())*INDIRECT("E"&ROW())' if sheet
+         else r["qty"] * r["per_share"]),
+        r["fx"] if r.get("fx") is not None else "",
+        r.get("source", ""), r.get("recorded", ""),
+    ]
+
+
+def _payout_file_load():
+    try:
+        with open(PAYOUT_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return [d for d in (_payout_row_to_dict(r) for r in raw) if d]
+    except Exception:
+        return []
+
+
+def _payout_file_save(rows):
+    try:
+        with open(PAYOUT_FILE, "w", encoding="utf-8") as f:
+            json.dump([[r["pay"].isoformat(),
+                        r["ex"].isoformat() if r.get("ex") else "",
+                        r["ticker"], r["qty"], r["per_share"],
+                        r.get("currency", ""), "",
+                        r["fx"] if r.get("fx") is not None else "",
+                        r.get("source", ""), r.get("recorded", "")]
+                       for r in rows], f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _payout_load():
+    """Nacita evidenciu: zo Sheetu, a ak nie je dostupny, zo suboru."""
+    ws = _payout_ws()
+    if ws is not None:
+        try:
+            vals = ws.get_all_values()
+            rows = [d for d in (_payout_row_to_dict(r) for r in vals[1:]) if d]
+            return rows
+        except Exception:
+            pass
+    return _payout_file_load()
+
+
+def payout_ledger(force=False):
+    """Evidencia v session (obnovi sa zo Sheetu najviac raz za 5 min)."""
+    now = time.time()
+    if (force or "_payout_ledger" not in st.session_state
+            or now - st.session_state.get("_payout_loaded_at", 0)
+            > PAYOUT_RELOAD_SECONDS):
+        st.session_state["_payout_ledger"] = _payout_load()
+        st.session_state["_payout_loaded_at"] = now
+    return st.session_state["_payout_ledger"]
+
+
+def _payout_append(new_rows):
+    ws = _payout_ws()
+    if ws is not None:
+        ws.append_rows([_payout_dict_to_row(r) for r in new_rows],
+                       value_input_option="USER_ENTERED")
+
+
+def _payout_rewrite(rows):
+    ws = _payout_ws()
+    if ws is not None:
+        ws.clear()
+        ws.update([PAYOUT_HEADER] + [_payout_dict_to_row(r) for r in rows],
+                  value_input_option="USER_ENTERED")
+
+
+def record_due_payouts(holdings, stock_records, today):
+    """Zapise do evidencie vyplaty, ktorych ex-div datum uz nastal a ktore
+    tam este nie su. Pocet akcii = aktualny pocet (ku ex-div datumu).
+    Vrati pocet novych zaznamov."""
+    ledger = payout_ledger()
+    keys = {(r["ticker"], r["pay"]) for r in ledger}
+    store = _pay_store_get()
+    fx_cache = {}
+    cands = []
+    for tkr, qty in holdings.items():
+        rec = stock_records.get(tkr)
+        if rec is None:
+            continue
+        items = []
+        ent = store.get(tkr)
+        if ent:
+            for it in ent.get("items", []):
+                pd_, ex_ = _to_date(it.get("date")), _to_date(it.get("ex"))
+                if pd_ and ex_:
+                    items.append({"pay": pd_, "ex": ex_,
+                                  "amount": it.get("amount"),
+                                  "src": it.get("src") or "dividendmax"})
+        yp, yx = rec.get("pay_div_date"), rec.get("ex_div_date")
+        if yp and yx and not any(i["pay"] == yp for i in items):
+            items.append({"pay": yp, "ex": yx, "amount": None, "src": "yahoo"})
+        for it in items:
+            if (it["ex"] <= today and it["pay"] >= it["ex"]
+                    and it["pay"] >= today - timedelta(days=7)
+                    and (tkr, it["pay"]) not in keys):
+                per = it["amount"]
+                src = it["src"]
+                if per is None:
+                    per = rec.get("last_div_amount")
+                    src += " (suma odhad)"
+                if per is None or float(per) <= 0:
+                    continue
+                cur = rec.get("currency", "")
+                if cur not in fx_cache:
+                    fx_cache[cur] = get_fx_to_usd_rate(cur)
+                cands.append({
+                    "pay": it["pay"], "ex": it["ex"], "ticker": tkr,
+                    "qty": float(qty), "per_share": float(per),
+                    "currency": cur, "fx": fx_cache[cur], "source": src,
+                    "recorded": datetime.now(timezone.utc).strftime(
+                        "%Y-%m-%d %H:%M"),
+                })
+    if not cands:
+        return 0
+    # znova nacitat cerstvy stav (aby sa nic nezdvojilo ani neprepisalo)
+    fresh = payout_ledger(force=True)
+    have = {(r["ticker"], r["pay"]) for r in fresh}
+    new_rows = [c for c in cands if (c["ticker"], c["pay"]) not in have]
+    if not new_rows:
+        return 0
+    try:
+        _payout_append(new_rows)
+    except Exception as e:
+        st.session_state["_payout_status"] = (
+            "Zapis do Sheetu zlyhal: " + type(e).__name__ + ": " + str(e)[:120])
+    fresh.extend(new_rows)
+    st.session_state["_payout_ledger"] = fresh
+    _payout_file_save(fresh)
+    return len(new_rows)
+
+
 def make_usd_bar_chart(series, x_title, height=320, bar_color="#2f6fed"):
     """
     Postavi Altair bar chart so zvacsenym pismom na osiach a s tooltip-om
@@ -2441,7 +2666,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v21"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v22"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3476,11 +3701,180 @@ else:
             st.write("Ziadne chyby.")
 
 # ============================================================
+# SEKCIA 5b – SKUTOCNE PRIJATE DIVIDENDY (evidencia v Google Sheets)
+# ============================================================
+
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown("#### Skutocne prijate dividendy")
+st.markdown(
+    "<div class=\"section-note\">Evidencia sa uklada do Google Sheets (list "
+    "'Payouts'). Akonahle je znamy ex-div datum aj potvrdeny datum vyplaty, "
+    "appka zapise riadok: pocet akcii, ktore MAS v tej chvili x suma na akciu. "
+    "Zaznam sa uz neprepisuje, takze neskorsie nakupy ho nezmenia. Do "
+    "prijatych sa zapocita od datumu vyplaty. Starsie roky mozes doplnit "
+    "rucne nizsie (alebo priamo v Sheete).</div>",
+    unsafe_allow_html=True,
+)
+
+if not st.session_state.holdings:
+    st.info("Pridaj akcie vyssie, aby sa tu zobrazila evidencia dividend.")
+else:
+    _today_l = datetime.now(timezone.utc).date()
+    try:
+        _n_new = record_due_payouts(
+            st.session_state.holdings, stock_records, _today_l)
+    except Exception as _e:
+        _n_new = 0
+        st.session_state["_payout_status"] = (
+            "Zaznam zlyhal: " + type(_e).__name__ + ": " + str(_e)[:120])
+    _ledger = payout_ledger()
+    if st.session_state.get("_payout_status"):
+        st.warning(st.session_state["_payout_status"])
+    if _n_new:
+        st.success("Do evidencie pridanych novych zaznamov: " + str(_n_new))
+
+    _fx_l = {}
+
+    def _fx_for(_cur, _stored):
+        if _stored:
+            return _stored
+        if _cur not in _fx_l:
+            _fx_l[_cur] = get_fx_to_usd_rate(_cur) or 1.0
+        return _fx_l[_cur]
+
+    if not _ledger:
+        st.info(
+            "Evidencia je zatial prazdna. Prve zaznamy pribudnu automaticky, "
+            "ked nastane ex-div datum potvrdenej vyplaty; minulost mozes "
+            "doplnit nizsie.")
+    else:
+        _df_l = pd.DataFrame([{
+            "pay": r["pay"], "ticker": r["ticker"], "qty": r["qty"],
+            "per_share": r["per_share"], "currency": r["currency"],
+            "usd": r["qty"] * r["per_share"] * _fx_for(r["currency"], r["fx"]),
+        } for r in _ledger])
+        _df_l["year"] = _df_l["pay"].apply(lambda d: d.year)
+        _df_l["month"] = _df_l["pay"].apply(lambda d: d.strftime("%Y-%m"))
+        _df_l["received"] = _df_l["pay"].apply(lambda d: d <= _today_l)
+
+        _years = sorted(_df_l["year"].unique(), reverse=True)
+        _cur_year = _today_l.year
+        _sel_default = _years.index(_cur_year) if _cur_year in _years else 0
+        _sel_year = st.selectbox(
+            "Rok", _years, index=_sel_default, key="payout_year")
+        _rec_y = _df_l[(_df_l["year"] == _sel_year) & _df_l["received"]]
+        _pend_y = _df_l[(_df_l["year"] == _sel_year) & ~_df_l["received"]]
+        _tot_y = _rec_y["usd"].sum()
+        _prev = _df_l[(_df_l["year"] == _sel_year - 1) & _df_l["received"]]
+        _tot_prev = _prev["usd"].sum()
+
+        _c1, _c2 = st.columns([1, 3])
+        with _c1:
+            st.metric(
+                "Prijate v roku " + str(_sel_year), fmt_curr(_tot_y, "USD", 2),
+                delta=((fmt_curr(_tot_y - _tot_prev, "USD", 2)
+                        + " oproti " + str(_sel_year - 1))
+                       if _tot_prev > 0 else None),
+            )
+            st.metric("Zaznamenane, este nevyplatene",
+                      fmt_curr(_pend_y["usd"].sum(), "USD", 2))
+            st.metric("Pocet prijatych vyplat", str(len(_rec_y)))
+        with _c2:
+            _months = [str(_sel_year) + "-" + ("%02d" % m) for m in range(1, 13)]
+            _ms = (_rec_y.groupby("month")["usd"].sum()
+                   .reindex(_months).fillna(0.0))
+            st.markdown(
+                "<div class=\"chart-label\">Prijate dividendy po mesiacoch "
+                "(USD) - " + str(_sel_year) + "</div>",
+                unsafe_allow_html=True,
+            )
+            st.altair_chart(make_usd_bar_chart(_ms, "month"),
+                            use_container_width=True)
+
+        _yearly = (_df_l[_df_l["received"]].groupby("year")["usd"]
+                   .agg(["sum", "count"]).sort_index(ascending=False))
+        _yearly.columns = ["Prijate (USD)", "Pocet vyplat"]
+        st.markdown("**Porovnanie rokov**")
+        st.dataframe(_yearly.style.format({"Prijate (USD)": "{:.2f}"}),
+                     use_container_width=True)
+
+    with st.expander("Zaznamy - upravit, pridat historicke, zmazat",
+                     expanded=False):
+        st.caption(
+            "Sem mozes doplnit minule vyplaty (napr. rok 2025): datum vyplaty, "
+            "ticker, pocet akcii, suma na akciu a mena (GBp pre pence). "
+            "Po uprave stlac 'Ulozit zmeny'. Ak upravujes aj priamo v "
+            "Google Sheete, najprv obnov stranku.")
+        _edit_src = pd.DataFrame([{
+            "Datum vyplaty": r["pay"], "Ticker": r["ticker"],
+            "Pocet akcii": r["qty"], "Suma na akciu": r["per_share"],
+            "Mena": r["currency"], "Zdroj": r["source"],
+        } for r in sorted(_ledger, key=lambda x: x["pay"], reverse=True)]
+        ) if _ledger else pd.DataFrame({
+            "Datum vyplaty": pd.Series(dtype="object"),
+            "Ticker": pd.Series(dtype="str"),
+            "Pocet akcii": pd.Series(dtype="float"),
+            "Suma na akciu": pd.Series(dtype="float"),
+            "Mena": pd.Series(dtype="str"),
+            "Zdroj": pd.Series(dtype="str"),
+        })
+        _edited = st.data_editor(
+            _edit_src, num_rows="dynamic", use_container_width=True,
+            key="payout_editor",
+            column_config={
+                "Datum vyplaty": st.column_config.DateColumn(
+                    "Datum vyplaty", format="DD/MM/YYYY"),
+                "Pocet akcii": st.column_config.NumberColumn(
+                    "Pocet akcii", format="%.5f"),
+                "Suma na akciu": st.column_config.NumberColumn(
+                    "Suma na akciu", format="%.4f"),
+            },
+        )
+        if st.button("Ulozit zmeny do Google Sheets", key="payout_save"):
+            _old = {(r["ticker"], r["pay"]): r for r in _ledger}
+            _new_rows = []
+            _bad = 0
+            for _, _r in _edited.iterrows():
+                _pd = _to_date(_r.get("Datum vyplaty"))
+                _tk = str(_r.get("Ticker") or "").strip().upper()
+                _q = _to_float(_r.get("Pocet akcii"))
+                _ps = _to_float(_r.get("Suma na akciu"))
+                if _pd is None or not _tk or _q is None or _ps is None:
+                    if any(str(_r.get(c) or "").strip() not in ("", "nan", "None", "NaT")
+                           for c in _edited.columns):
+                        _bad += 1
+                    continue
+                _cur = str(_r.get("Mena") or "").strip() or (
+                    (stock_records.get(_tk) or {}).get("currency", "USD"))
+                _o = _old.get((_tk, _pd))
+                _new_rows.append({
+                    "pay": _pd, "ex": (_o or {}).get("ex"), "ticker": _tk,
+                    "qty": _q, "per_share": _ps, "currency": _cur,
+                    "fx": ((_o or {}).get("fx") if _o and _o.get("currency") == _cur
+                           else get_fx_to_usd_rate(_cur)),
+                    "source": (_o or {}).get("source") or "rucne",
+                    "recorded": (_o or {}).get("recorded")
+                    or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                })
+            try:
+                _payout_rewrite(_new_rows)
+                _payout_file_save(_new_rows)
+                st.session_state["_payout_ledger"] = _new_rows
+                st.session_state["_payout_loaded_at"] = time.time()
+                st.session_state.pop("_payout_status", None)
+                st.success("Ulozene: " + str(len(_new_rows)) + " zaznamov"
+                           + ((" (" + str(_bad) + " neuplnych riadkov "
+                               "preskocenych)") if _bad else ""))
+            except Exception as _e:
+                st.error("Ulozenie zlyhalo: " + type(_e).__name__ + ": "
+                         + str(_e)[:150])
+
+# ============================================================
 # SEKCIA 6 – HISTORIA VYPLATENYCH DIVIDEND (posledne roky)
 # ============================================================
 
 st.markdown("<br>", unsafe_allow_html=True)
-st.markdown("#### Historia vyplatenych dividend")
+st.markdown("#### Historia vyplatenych dividend (odhad)")
 st.markdown(
     "<div class=\"section-note\">Odhad na zaklade AKTUALNE drzaneho "
     "mnozstva akcii a oficialnych historickych ex-div datumov a vysok "
