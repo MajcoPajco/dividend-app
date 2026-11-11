@@ -2376,7 +2376,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v16"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v17"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3279,6 +3279,8 @@ else:
         if _nx is not None and today_pay <= _nx <= today_pay + timedelta(days=60):
             _near = True
         _h = _r.get("dividends_history")
+        if _h is None or len(_h) == 0:
+            _near = True   # bez historie nevieme okno posudit - skusit digrin
         try:
             if _h is not None and len(_h) > 0:
                 _lx = _h.index[-1].date()
