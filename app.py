@@ -352,7 +352,6 @@ BACKUP_COLUMNS = [
     "ExDivDate", "PayDivDate", "Frequency",
     "Growth1M", "Growth3M", "Growth6M", "Growth1Y", "Growth5Y", "Growth10Y",
     "UpdatedAt", "Source", "DivHistoryJSON",
-    "ManualPayDate", "ManualPayAmount",
 ]
 FULL_SHEET_HEADER = GSHEET_HEADER + BACKUP_COLUMNS
 DIV_HISTORY_CAP = 60
@@ -413,54 +412,6 @@ def _merge_caches(a, b):
     return merged
 
 
-def _manual_pay_cells(tkr):
-    """Hodnoty stlpcov ManualPayDate/ManualPayAmount pre ticker (rucne
-    zadany potvrdeny datum vyplaty z session_state['manual_pay'])."""
-    try:
-        mp = st.session_state.get("manual_pay", {}).get(tkr)
-    except Exception:
-        mp = None
-    if not mp or mp.get("date") is None:
-        return ["", ""]
-    amt = mp.get("amount")
-    return [mp["date"].isoformat(), "" if amt is None else float(amt)]
-
-
-def _read_manual_pay(all_vals):
-    """Precita rucne zadane potvrdene datumy vyplat zo stlpcov
-    ManualPayDate/ManualPayAmount (nezavisle od zalohy dat akcie)."""
-    out = {}
-    if not all_vals:
-        return out
-    first_row = [str(c).strip().lower() for c in all_vals[0]]
-    has_header = "ticker" in first_row
-    data_rows = all_vals[1:] if has_header else all_vals
-    n = 3 + len(BACKUP_COLUMNS)
-    i_date = 3 + BACKUP_COLUMNS.index("ManualPayDate")
-    i_amt = 3 + BACKUP_COLUMNS.index("ManualPayAmount")
-    for row in data_rows:
-        row = list(row) + [""] * n
-        tkr = str(row[0]).strip().upper()
-        if not tkr or tkr in ("TICKER", "SYMBOL"):
-            continue
-        raw_d = str(row[i_date]).strip()
-        if not raw_d:
-            continue
-        try:
-            d = date.fromisoformat(raw_d)
-        except Exception:
-            continue
-        amt = None
-        raw_a = str(row[i_amt]).strip().replace(",", ".")
-        if raw_a:
-            try:
-                amt = float(raw_a)
-            except Exception:
-                amt = None
-        out[tkr] = {"date": d, "amount": amt}
-    return out
-
-
 def _backup_row_for_ticker(tkr, cache):
     """
     Vrati zoznam hodnot (presne v poradi BACKUP_COLUMNS) pre dany ticker,
@@ -471,7 +422,7 @@ def _backup_row_for_ticker(tkr, cache):
     """
     entry = cache.get(tkr)
     if entry is None:
-        return [""] * (len(BACKUP_COLUMNS) - 2) + _manual_pay_cells(tkr)
+        return [""] * len(BACKUP_COLUMNS)
     rec = entry.get("rec") or {}
     g = rec.get("growth") or {}
     ex_d = rec.get("ex_div_date")
@@ -499,7 +450,7 @@ def _backup_row_for_ticker(tkr, cache):
         ts.astimezone(timezone.utc).isoformat() if isinstance(ts, datetime) else "",
         _sheet_cell(entry.get("source")),
         _div_history_to_json(rec.get("dividends_history")),
-    ] + _manual_pay_cells(tkr)
+    ]
 
 
 def _build_sheet_rows(holdings, exchanges, cache):
@@ -790,7 +741,6 @@ def load_holdings_and_backup():
                     "exchange": r_norm.get("exchange", ""),
                 }
             backup_cache = _read_backup_rows(all_vals)
-            st.session_state["manual_pay"] = _read_manual_pay(all_vals)
             return result, backup_cache
         except Exception as e:
             st.session_state["gsheet_status"] = {
@@ -1633,17 +1583,6 @@ FREQ_INTERVAL_DAYS = {
 # (zvycajne cca 2-4 tyzdne pri US akciach).
 PAYOUT_LAG_DAYS_ESTIMATE = 21
 
-# Overene POTVRDENE datumy vyplat (z oznameni firiem / dividendmax,
-# AJ Bell, StockEvents k 10.11.2026), ktore Yahoo Finance neposkytuje.
-# Pouzivaju sa ako predvolene, kym neuplynie datum vyplaty; rucne zadany
-# datum v appke (sekcia Vyplacane dividendy) ma prednost. Sumy su na akciu
-# v mene akcie (DNLM.L v GBp).
-MANUAL_PAY_SEED = {
-    "BTI": {"date": date(2026, 11, 12), "amount": 0.834851},
-    "AKRBP.OL": {"date": date(2026, 11, 12), "amount": 6.15},
-    "DNLM.L": {"date": date(2026, 11, 17), "amount": 28.5},
-}
-
 
 def project_future_dividend_dates(rec, today, horizon_end, max_events=12):
     """
@@ -1881,8 +1820,6 @@ if "_fetch_cursor" not in st.session_state:
     st.session_state["_fetch_cursor"] = 0
 if "_sheet_backup_last_write_ts" not in st.session_state:
     st.session_state["_sheet_backup_last_write_ts"] = None
-if "manual_pay" not in st.session_state:
-    st.session_state["manual_pay"] = {}
 
 
 def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None):
@@ -2090,7 +2027,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v13"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v10"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -2975,17 +2912,7 @@ else:
         if rec is None:
             continue
         confirmed_pay_date = rec.get("pay_div_date")
-        # Rucne zadany POTVRDENY datum vyplaty (z vlastneho zdroja) ma
-        # prednost pred Yahoo - Yahoo datum vyplaty pre niektore akcie
-        # (napr. zahranicne, ADR) vobec neposkytuje.
-        _mp = (st.session_state.get("manual_pay", {}).get(tkr)
-               or MANUAL_PAY_SEED.get(tkr))
-        _manual_amount = None
-        if _mp and _mp.get("date") is not None and _mp["date"] >= today_pay:
-            pay_date = _mp["date"]
-            confirmed_pay = True
-            _manual_amount = _mp.get("amount")
-        elif confirmed_pay_date is not None and confirmed_pay_date >= today_pay:
+        if confirmed_pay_date is not None and confirmed_pay_date >= today_pay:
             pay_date = confirmed_pay_date
             confirmed_pay = True
         else:
@@ -2995,9 +2922,7 @@ else:
             pay_date = ev["date"] + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE)
             confirmed_pay = False
         price = rec["price"]
-        last_div = _manual_amount
-        if last_div is None:
-            last_div = rec.get("next_expected_amount")
+        last_div = rec.get("next_expected_amount")
         if last_div is None:
             last_div = rec["last_div_amount"]
         annual_rate = rec["annual_rate"]
@@ -3066,76 +2991,6 @@ else:
             + "</tbody></table></div>",
             unsafe_allow_html=True,
         )
-
-    with st.expander("Preco v tejto tabulke chyba moja akcia?", expanded=False):
-        st.caption(
-            "Appka berie datum vyplaty z Yahoo Finance (pole 'dividendDate'). "
-            "Ak ho Yahoo pre akciu nema, datum sa odhadne z posledneho "
-            "ex-div + " + str(PAYOUT_LAG_DAYS_ESTIMATE) + " dni. Akcie s "
-            "dlhsim odstupom medzi ex-div a vyplatou (napr. UK) tak mozu "
-            "chybat. Vyber ticker a uvidis, co o nom Yahoo vratil."
-        )
-        _dg_tkr = st.selectbox(
-            "Ticker", sorted(st.session_state.holdings.keys()),
-            key="pay_diag_ticker",
-        )
-        _dg = stock_records.get(_dg_tkr)
-        if _dg is None:
-            st.warning("Pre " + _dg_tkr + " zatial nie su ziadne stiahnute data.")
-        else:
-            _dh = _dg.get("dividends_history")
-            _last3 = []
-            if _dh is not None and len(_dh) > 0:
-                for _ix, _vv in list(_dh.iloc[-3:].items()):
-                    _last3.append(
-                        str(pd.Timestamp(_ix).date()) + " (" + str(_vv) + ")")
-            st.write({
-                "Datum vyplaty z Yahoo (dividendDate)":
-                    str(_dg.get("pay_div_date")),
-                "Ex-div datum z Yahoo (exDividendDate)":
-                    str(_dg.get("ex_div_date")),
-                "Posledne ex-div z historie (suma)": ", ".join(_last3) or "N/A",
-                "Frekvencia": str(_dg.get("frequency")),
-                "Zobrazeny v tabulke vyssie":
-                    "ano" if any(r["ticker"] == _dg_tkr for r in pay_rows)
-                    else "nie",
-            })
-
-        st.markdown("**Rucne zadat potvrdeny datum vyplaty**")
-        st.caption(
-            "Ak Yahoo datum vyplaty nema, ale ty ho poznas (z oznamenia "
-            "firmy), zadaj ho tu - akcia sa zobrazi ako 'Potvrdene' a "
-            "ulozi sa do Google Sheets. Po uplynuti datumu sa zaznam "
-            "sam prestane pouzivat. Suma na akciu je volitelna (0 = "
-            "pouzit odhad z histori)."
-        )
-        _cur_mp = st.session_state["manual_pay"].get(_dg_tkr) or {}
-        _mc1, _mc2 = st.columns(2)
-        with _mc1:
-            _mp_date = st.date_input(
-                "Datum vyplaty", value=_cur_mp.get("date") or today_pay,
-                key="mp_date_" + _dg_tkr, format="DD/MM/YYYY",
-            )
-        with _mc2:
-            _mp_amt = st.number_input(
-                "Suma na akciu (volitelne, 0 = auto)", min_value=0.0,
-                value=float(_cur_mp.get("amount") or 0.0), step=0.01,
-                format="%.4f", key="mp_amt_" + _dg_tkr,
-            )
-        _mb1, _mb2 = st.columns(2)
-        with _mb1:
-            if st.button("Ulozit potvrdeny datum", key="mp_save_" + _dg_tkr):
-                st.session_state["manual_pay"][_dg_tkr] = {
-                    "date": _mp_date,
-                    "amount": (_mp_amt if _mp_amt > 0 else None),
-                }
-                _force_write_stock_backup_to_sheet()
-                st.rerun()
-        with _mb2:
-            if _cur_mp and st.button("Zmazat rucny datum", key="mp_del_" + _dg_tkr):
-                st.session_state["manual_pay"].pop(_dg_tkr, None)
-                _force_write_stock_backup_to_sheet()
-                st.rerun()
 
 # ============================================================
 # SEKCIA 6 – HISTORIA VYPLATENYCH DIVIDEND (posledne roky)
