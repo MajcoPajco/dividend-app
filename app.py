@@ -1932,20 +1932,41 @@ def _pay_store_get():
     return st.session_state["_pay_store"]
 
 
-def _pay_entry_due(entry, now):
+def _pay_entry_due(tkr, entry, now, rec=None):
+    """Treba pre ticker znova nacitat web? Potvrdene datumy sa NEPREVERUJU
+    znova, kym nie su minule: kontroluju sa len akcie, ktore este nemaju
+    potvrdeny buduci datum."""
+    today = now.date()
+    yahoo_d = (rec or {}).get("pay_div_date")
+    yahoo_has = yahoo_d is not None and yahoo_d >= today
     if entry is None:
-        return True
+        # Yahoo uz ma potvrdeny datum -> web netreba (okrem dividendmax akcii)
+        return not (yahoo_has and tkr not in DMAX_URLS)
     try:
         chk = datetime.fromisoformat(entry["checked"])
     except Exception:
         return True
     age_h = (now - chk).total_seconds() / 3600.0
-    limit = PAY_REFRESH_HOURS
-    if entry.get("err") and not entry.get("items"):
-        limit = PAY_ERROR_RETRY_HOURS
     if entry.get("throttled"):
-        limit = 0.25   # web docasne obmedzil poziadavky - skusit o 15 min
-    return age_h >= limit
+        return age_h >= 0.25          # web docasne obmedzil - skusit o 15 min
+    dates = []
+    for it in entry.get("items", []):
+        try:
+            dates.append(date.fromisoformat(it["date"]))
+        except Exception:
+            pass
+    future = [d for d in dates if d >= today]
+    if future:
+        if any(d < today for d in dates):
+            return True               # niektora vyplata uz presla -> obnovit
+        if entry.get("src") == "digrin":
+            return age_h >= 48        # digrin moze obsahovat aj odhad
+        return age_h >= 24 * 7        # potvrdene: najviac raz za tyzden
+    if yahoo_has and tkr not in DMAX_URLS:
+        return False                  # Yahoo uz ma potvrdeny datum
+    if entry.get("err"):
+        return age_h >= PAY_ERROR_RETRY_HOURS
+    return age_h >= PAY_REFRESH_HOURS  # este nic oznamene -> raz denne
 
 
 def refresh_pay_store(holdings, stock_records, force=False):
@@ -1962,7 +1983,7 @@ def refresh_pay_store(holdings, stock_records, force=False):
         rec = stock_records.get(tkr)
         if rec is None:
             continue
-        if force or _pay_entry_due(store.get(tkr), now):
+        if force or _pay_entry_due(tkr, store.get(tkr), now, rec):
             todo.append((tkr, rec.get("currency", "")))
     # akcie s dividendmax odkazom a bez zaznamu maju prednost
     todo.sort(key=lambda tc: (tc[0] not in DMAX_URLS,
@@ -2419,7 +2440,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v19"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v20"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3289,7 +3310,7 @@ st.markdown(
     "<div class=\"section-note\">Zobrazuju sa LEN potvrdene vyplaty "
     "(oznamene firmou), najblizsich 30. Datumy sa automaticky nacitavaju z "
     "dividendmax.com a digrin.com (a z Yahoo), raz denne, a ukladaju sa "
-    "trvalo. Stlpec Status ukazuje zdroj datumu: Dividendmax, Yahoo alebo Digrin.</div>",
+    "trvalo (potvrdene datumy sa nepreverujuju znova, kym nepreidu). Stlpec Status ukazuje zdroj datumu: Dividendmax, Yahoo alebo Digrin.</div>",
     unsafe_allow_html=True,
 )
 
