@@ -2376,7 +2376,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v15"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v16"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3259,6 +3259,7 @@ if not st.session_state.holdings:
 else:
     today_pay = datetime.now(timezone.utc).date()
     pay_rows = []
+    _pending_unknown = []
 
     # Kandidati na automaticke citanie z digrin: akcie, ktore maju ex-div
     # krátko po nás alebo nedavno za sebou (vyplata este moze cakat) a
@@ -3271,19 +3272,17 @@ else:
         if (_r.get("pay_div_date") is not None
                 and _r["pay_div_date"] >= today_pay):
             continue
-        if (st.session_state.get("dmax_urls", {}).get(_t)
-                or DMAX_URL_SEED.get(_t)
-                or st.session_state.get("manual_pay", {}).get(_t)):
+        if st.session_state.get("manual_pay", {}).get(_t):
             continue
         _near = False
         _nx = _r.get("ex_div_date")
-        if _nx is not None and today_pay <= _nx <= today_pay + timedelta(days=35):
+        if _nx is not None and today_pay <= _nx <= today_pay + timedelta(days=60):
             _near = True
         _h = _r.get("dividends_history")
         try:
             if _h is not None and len(_h) > 0:
                 _lx = _h.index[-1].date()
-                if today_pay - timedelta(days=60) <= _lx <= today_pay:
+                if today_pay - timedelta(days=75) <= _lx <= today_pay:
                     _near = True
         except Exception:
             pass
@@ -3338,6 +3337,15 @@ else:
                 continue
             pay_date = ev["date"] + timedelta(days=PAYOUT_LAG_DAYS_ESTIMATE)
         confirmed_pay = pay_source == "potvrdene"
+        if pay_source == "odhad":
+            try:
+                _hh = rec.get("dividends_history")
+                if _hh is not None and len(_hh) > 0:
+                    _lx2 = _hh.index[-1].date()
+                    if today_pay - timedelta(days=60) <= _lx2 <= today_pay:
+                        _pending_unknown.append((tkr, _lx2))
+            except Exception:
+                pass
         price = rec["price"]
         last_div = _manual_amount
         if last_div is None:
@@ -3366,7 +3374,9 @@ else:
         )
     else:
         pay_rows.sort(key=lambda r: r["pay_date"])
-        pay_rows = pay_rows[:30]
+        _lim = today_pay + timedelta(days=60)
+        _within = [r for r in pay_rows if r["pay_date"] <= _lim]
+        pay_rows = (_within if len(_within) >= 30 else pay_rows[:30])[:80]
         pay_row_parts = []
         for r in pay_rows:
             pct_annual_str = fmt_pct(r["pct_annual"])
@@ -3414,6 +3424,33 @@ else:
             + "</tbody></table></div>",
             unsafe_allow_html=True,
         )
+
+    # --- Stav automatickych zdrojov a akcie bez zistenej vyplaty ---
+    if _pending_unknown:
+        st.warning(
+            "Ex-div uz bolo, ale datum vyplaty sa NEPODARILO zistit "
+            "(z Yahoo, dividendmax ani digrin): "
+            + ", ".join(t + " (ex " + d.strftime("%d/%m") + ")"
+                        for t, d in sorted(_pending_unknown, key=lambda x: x[1]))
+            + ". Tieto akcie v tabulke vyssie nemaju svoju najblizsiu "
+            "vyplatu - skus ich v rozbalovaci nizsie."
+        )
+    _ws = _web_store()
+    _dg_ok = sum(1 for k in _ws["data"] if k[0] == "digrin")
+    _dg_bad = {k[1]: v[1] for k, v in _ws["fail"].items() if k[0] == "digrin"}
+    _dm_bad = dict(st.session_state.get("_dmax_errors", {}))
+    _parts = ["digrin: " + str(_dg_ok) + " nacitanych, "
+              + str(len(_dg_bad)) + " zlyhalo"]
+    _n_dm_urls = len(st.session_state.get("dmax_urls", {}))
+    _parts.append("dividendmax: " + str(_n_dm_urls) + " ulozenych odkazov, "
+                  + str(len(_dm_bad)) + " bez vysledku")
+    st.caption("Zdroje datumov vyplat - " + "; ".join(_parts))
+    if _dg_bad or _dm_bad:
+        with st.expander("Chyby automatickeho nacitania", expanded=False):
+            for _k, _v in list(_dm_bad.items())[:30]:
+                st.write("dividendmax " + _k + ": " + str(_v))
+            for _k, _v in list(_dg_bad.items())[:30]:
+                st.write("digrin " + _k + ": " + str(_v))
 
     with st.expander("Preco v tejto tabulke chyba moja akcia?", expanded=False):
         st.caption(
