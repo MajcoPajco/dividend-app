@@ -1654,7 +1654,7 @@ PAY_STORE_FILE = Path(__file__).resolve().parent / "pay_dates_store.json"
 PAY_SHEET_TITLE = "PayDates"
 PAY_REFRESH_HOURS = 20
 PAY_ERROR_RETRY_HOURS = 2
-PAY_MAX_FETCH_PER_RUN = 100
+PAY_MAX_FETCH_PER_RUN = 60
 DIGRIN_MAX_DAYS = 45
 
 _WEB_HEADERS = {
@@ -1799,6 +1799,7 @@ def _pay_fetch_one(tkr, currency, today):
     (nepouziva session_state)."""
     errs = []
     notes = []
+    throttled = False
     sources = []
     if tkr in DMAX_URLS:
         sources.append(("dividendmax", DMAX_URLS[tkr],
@@ -1807,9 +1808,20 @@ def _pay_fetch_one(tkr, currency, today):
                     lambda h: _parse_digrin_all(h, today, currency)))
     for name, url, parser in sources:
         try:
+            if name == "digrin":
+                time.sleep(0.4)   # setrne k webu
             resp = requests.get(url, headers=_WEB_HEADERS, timeout=15)
+            if resp.status_code == 429:
+                try:
+                    _w = min(float(resp.headers.get("Retry-After", "3")), 6.0)
+                except Exception:
+                    _w = 3.0
+                time.sleep(_w)
+                resp = requests.get(url, headers=_WEB_HEADERS, timeout=15)
             if resp.status_code != 200:
                 errs.append(name + ": HTTP " + str(resp.status_code))
+                if resp.status_code == 429:
+                    throttled = True
                 continue
             items = parser(resp.text)
             if items:
@@ -1828,7 +1840,8 @@ def _pay_fetch_one(tkr, currency, today):
     # vyplata' a nie chyby siete, je to normalny stav)
     return {"checked": datetime.now(timezone.utc).isoformat(),
             "src": None, "err": "; ".join(errs) or None,
-            "note": "; ".join(notes) or None, "items": []}
+            "note": "; ".join(notes) or None, "items": [],
+            "throttled": throttled}
 
 
 def _pay_store_load_file():
@@ -1930,6 +1943,8 @@ def _pay_entry_due(entry, now):
     limit = PAY_REFRESH_HOURS
     if entry.get("err") and not entry.get("items"):
         limit = PAY_ERROR_RETRY_HOURS
+    if entry.get("throttled"):
+        limit = 0.25   # web docasne obmedzil poziadavky - skusit o 15 min
     return age_h >= limit
 
 
@@ -1955,19 +1970,35 @@ def refresh_pay_store(holdings, stock_records, force=False):
     todo = todo[:PAY_MAX_FETCH_PER_RUN]
     if not todo:
         return 0
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        results = list(ex.map(
-            lambda tc: (tc[0], _pay_fetch_one(tc[0], tc[1], today)), todo))
+    n_done = 0
     changed = False
-    for tkr, entry in results:
-        old = store.get(tkr)
-        if old is None or old.get("items") != entry["items"]:
-            changed = True
-        store[tkr] = entry
+    for i in range(0, len(todo), 9):
+        chunk = todo[i:i + 9]
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            results = list(ex.map(
+                lambda tc: (tc[0], _pay_fetch_one(tc[0], tc[1], today)), chunk))
+        n_throttled = 0
+        for tkr, entry in results:
+            old = store.get(tkr)
+            if entry.get("throttled"):
+                n_throttled += 1
+            if not entry["items"] and entry.get("err") and old and old.get("items"):
+                # docasna chyba webu - zachovat predosle nacitane datumy
+                kept = dict(old)
+                kept["checked"] = entry["checked"]
+                kept["err"] = entry["err"]
+                kept["throttled"] = entry.get("throttled", False)
+                entry = kept
+            elif old is None or old.get("items") != entry["items"]:
+                changed = True
+            store[tkr] = entry
+            n_done += 1
+        if n_throttled >= 3:
+            break   # web nas obmedzuje - zvysok sa dopocita pri dalsom kole
     _pay_store_save_file(store)
     if changed:
         _pay_store_save_sheet(store)
-    return len(results)
+    return n_done
 
 
 def confirmed_pay_items(tkr, rec, today):
@@ -2103,6 +2134,9 @@ st.markdown(
     ".freq-monthly{background:#e3f7ea;color:#1c9350;}"
     ".freq-yearly{background:#f2e9fb;color:#7c3fc9;}"
     ".freq-semiannual{background:#fceceb;color:#c2453c;}"
+    ".src-dmax{background:#e3f7ea;color:#1c9350;}"
+    ".src-yahoo{background:#fff1dc;color:#b8630a;}"
+    ".src-digrin{background:#f2e9fb;color:#7c3fc9;}"
     ".growth-pos{color:#15a24a;font-weight:600;}"
     ".growth-neg{color:#e0362b;font-weight:600;}"
     ".section-note{font-size:15px;line-height:1.55;color:#5b6472;"
@@ -2385,7 +2419,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v18"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v19"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3255,7 +3289,7 @@ st.markdown(
     "<div class=\"section-note\">Zobrazuju sa LEN potvrdene vyplaty "
     "(oznamene firmou), najblizsich 30. Datumy sa automaticky nacitavaju z "
     "dividendmax.com a digrin.com (a z Yahoo), raz denne, a ukladaju sa "
-    "trvalo. 'Potvrdene' = dividendmax alebo Yahoo; 'Digrin' = digrin.com.</div>",
+    "trvalo. Stlpec Status ukazuje zdroj datumu: Dividendmax, Yahoo alebo Digrin.</div>",
     unsafe_allow_html=True,
 )
 
@@ -3309,12 +3343,13 @@ else:
                                           + fmt_num(r["total_div"] * r3, 2) + ")")
             else:
                 total_div_str = "N/A"
-            if r["src"] == "digrin":
-                status_html = ("<span class=\"freq-badge freq-yearly\">"
-                               "Digrin</span>")
-            else:
-                status_html = ("<span class=\"freq-badge freq-monthly\">"
-                               "Potvrdene</span>")
+            _src_cls, _src_txt = {
+                "dividendmax": ("src-dmax", "Dividendmax"),
+                "yahoo": ("src-yahoo", "Yahoo"),
+                "digrin": ("src-digrin", "Digrin"),
+            }.get(r["src"], ("src-dmax", str(r["src"])))
+            status_html = ("<span class=\"freq-badge " + _src_cls + "\">"
+                           + _src_txt + "</span>")
             pay_row_parts.append(
                 "<tr>"
                 "<td class=\"code-cell\">" + r["ticker"] + "</td>"
@@ -3373,11 +3408,25 @@ else:
                 + ((" | poznamka: " + _e["err"])
                    if _e and _e.get("items") and _e.get("err") else "")
             )
-        if _bad:
-            st.markdown("**Akcie, pri ktorych web zlyhal (nie 'bez vyplaty'):**")
-            for _t, _m in sorted(_bad.items())[:40]:
-                if "HTTP" in _m or "Error" in _m or "Exception" in _m:
-                    st.write(_t + ": " + _m)
+        _wait = [t for t in _held if _ps[t].get("throttled")]
+        if _wait:
+            st.info(
+                str(len(_wait)) + " akcii caka na opakovanie: digrin.com "
+                "docasne obmedzil pocet poziadaviek (chyba 'HTTP 429' = "
+                "prilis vela poziadaviek naraz). Nie je to chyba v appke ani "
+                "v datach - appka to skusi znova sama kazdych cca 15 minut "
+                "a postupne nacita vsetky. Zoznam: "
+                + ", ".join(sorted(_wait)[:60])
+            )
+        _other = {t: m for t, m in _bad.items()
+                  if t not in _wait and ("HTTP" in m or "Error" in m
+                                         or "Exception" in m)}
+        if _other:
+            st.markdown("**Ine chyby pri nacitani (skusi sa znova o 2 hodiny):**")
+            for _t, _m in sorted(_other.items())[:40]:
+                st.write(_t + ": " + _m)
+        if not _wait and not _other:
+            st.write("Ziadne chyby.")
 
 # ============================================================
 # SEKCIA 6 – HISTORIA VYPLATENYCH DIVIDEND (posledne roky)
