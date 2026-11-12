@@ -2825,7 +2825,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v25"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v26"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3753,11 +3753,11 @@ else:
             "odhad": "Odhad", "rucne": "Rucne",
         }
         _SRC_STYLE = {
-            "Dividendmax": "background-color:#e3f7ea;color:#1c9350;",
-            "Yahoo": "background-color:#fff1dc;color:#b8630a;",
-            "Digrin": "background-color:#f2e9fb;color:#7c3fc9;",
-            "Rucne": "background-color:#dff3f7;color:#0b7285;",
-            "Odhad": "background-color:#eceff1;color:#6b7280;",
+            "Dividendmax": "color:#1c9350;",
+            "Yahoo": "color:#b8630a;",
+            "Digrin": "color:#7c3fc9;",
+            "Rucne": "color:#0b7285;",
+            "Odhad": "color:#6b7280;",
         }
 
         def _style_src(val):
