@@ -1653,6 +1653,7 @@ DMAX_URLS = {
 PAY_STORE_FILE = Path(__file__).resolve().parent / "pay_dates_store.json"
 PAY_SHEET_TITLE = "PayDates"
 PAY_REFRESH_HOURS = 20
+PAY_PARSER_VERSION = 2   # zmena = vsetky ulozene datumy sa nacitaju znova
 PAY_ERROR_RETRY_HOURS = 2
 PAY_MAX_FETCH_PER_RUN = 60
 DIGRIN_MAX_DAYS = 45
@@ -1705,9 +1706,18 @@ def _amount_in_currency(value, unit, currency):
 
 
 def _merge_same_day(items):
-    """Platby s rovnakym datumom vyplaty (riadna + specialna) sa scitaju."""
-    by_day = {}
+    """Platby s rovnakym datumom vyplaty (riadna + specialna) sa scitaju.
+    Uplne rovnake riadky (ex, vyplata, suma) sa najprv zluciu - stranka ich
+    moze obsahovat dvakrat (napr. aj v mobilnom zobrazeni)."""
+    uniq, seen = [], set()
     for it in items:
+        k = (it["date"], it["ex"], it["amount"])
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(it)
+    by_day = {}
+    for it in uniq:
         by_day.setdefault(it["date"], []).append(it)
     out = []
     for d in sorted(by_day):
@@ -1720,13 +1730,91 @@ def _merge_same_day(items):
     return out
 
 
-def _parse_dividendmax_all(html_text, today, currency=""):
-    """Vsetky OZNAMENE ('Declared') vyplaty s datumom vyplaty >= today
-    zo stranky dividendmax.com/.../dividends. Cita sa text stranky, nie
-    pevne stlpce: usek zacinajuci 'Declared' po dalsi status je jeden
-    riadok; posledne dva datumy 'DD Mon YYYY' su ex-div a vyplata,
-    suma je '26.5c' / '28.5p' / '$0.26'."""
+def _cell_text(cell_html):
     import re
+    import html as _html
+    t = re.sub(r"(?s)<[^>]+>", " ", cell_html)
+    return re.sub(r"\s+", " ", _html.unescape(t)).strip()
+
+
+def _dmax_cell_amount(cell, dec_currency, currency):
+    """Suma z bunky 'Decl. amount' ('81.81c', '28.5p', '614.64c', '$0.26')."""
+    import re
+    t = cell.replace("\xa0", " ").strip()
+    if re.search(r"\d,\d{3}", t):
+        t = t.replace(",", "")
+    m = re.fullmatch(r"([£$€]?)\s*(\d+(?:[.,]\d+)?)\s*([pc]?)", t)
+    if not m:
+        return None
+    val = float(m.group(2).replace(",", "."))
+    if m.group(3):
+        return _amount_in_currency(val, m.group(3), currency)
+    if m.group(1):
+        return _amount_in_currency(val, m.group(1), currency)
+    return _amount_in_currency(val, (dec_currency or "").strip(), currency)
+
+
+def _dmax_from_table(html_text, today, currency):
+    """Cita tabulku dividendmax PODLA HLAVICKY stlpcov (Status, Ex-div date,
+    Pay date, Decl. Currency, Forecast amount, Decl. amount). Suma sa berie
+    zo stlpca 'Decl. amount' (nie z 'Forecast amount'). Vrati zoznam alebo
+    None, ak sa nenasla tabulka s takou hlavickou."""
+    import re
+    tables = re.findall(r"(?is)<table.*?</table>", html_text)
+    result = None
+    for tb in tables:
+        rows = []
+        for r in re.findall(r"(?is)<tr[^>]*>(.*?)</tr>", tb):
+            cells = [_cell_text(c) for c in
+                     re.findall(r"(?is)<t[dh][^>]*>(.*?)</t[dh]>", r)]
+            if cells:
+                rows.append(cells)
+        hdr_i = None
+        for i, cells in enumerate(rows):
+            low = [c.lower() for c in cells]
+            if "pay date" in low and any(c.startswith("decl. amount") for c in low):
+                hdr_i = i
+                break
+        if hdr_i is None:
+            continue
+        low = [c.lower() for c in rows[hdr_i]]
+        i_status = low.index("status") if "status" in low else 0
+        i_pay = low.index("pay date")
+        i_ex = next((k for k, c in enumerate(low) if c.startswith("ex-div")), None)
+        i_amt = next(k for k, c in enumerate(low) if c.startswith("decl. amount"))
+        i_cur = next((k for k, c in enumerate(low)
+                      if c.startswith("decl. currency")), None)
+        if result is None:
+            result = []
+        for cells in rows[hdr_i + 1:]:
+            if len(cells) <= max(i_pay, i_amt, i_status):
+                continue
+            if not cells[i_status].lower().startswith("declared"):
+                continue
+            try:
+                pay = datetime.strptime(cells[i_pay], "%d %b %Y").date()
+                ex = (datetime.strptime(cells[i_ex], "%d %b %Y").date()
+                      if i_ex is not None and len(cells) > i_ex else pay)
+            except Exception:
+                continue
+            if pay < today:
+                continue
+            dec_cur = cells[i_cur] if (i_cur is not None
+                                       and len(cells) > i_cur) else ""
+            result.append({"date": pay, "ex": ex, "amount": _dmax_cell_amount(
+                cells[i_amt], dec_cur, currency)})
+    return result
+
+
+def _parse_dividendmax_all(html_text, today, currency=""):
+    """Vsetky OZNAMENE ('Declared') vyplaty s datumom vyplaty >= today zo
+    stranky dividendmax.com/.../dividends. Najprv sa cita tabulka podla
+    hlavicky (suma zo stlpca 'Decl. amount'); ak taka tabulka nie je,
+    pouzije sa textovy zaloha (posledna suma v riadku)."""
+    import re
+    tbl = _dmax_from_table(html_text, today, currency)
+    if tbl is not None:
+        return _merge_same_day(tbl)
     text = _html_to_text(html_text)
     status_re = re.compile(
         r"\b(Declared|Forecast|Paid|Historic\w*|Estimated|Projected)\b\s*\|")
@@ -1752,15 +1840,12 @@ def _parse_dividendmax_all(html_text, today, currency=""):
             continue
         tail = seg[last_end:]
         amount = None
-        am = re.search(r"(?<![\d.])(\d+(?:[.,]\d+)?)\s*([pc])(?![A-Za-z])", tail)
-        if am:
+        ams = list(re.finditer(
+            r"(?<![\d.])(\d+(?:[.,]\d+)?)\s*([pc])(?![A-Za-z])", tail))
+        if ams:
+            am = ams[-1]   # posledna suma v riadku = 'Decl. amount'
             amount = _amount_in_currency(
                 float(am.group(1).replace(",", ".")), am.group(2), currency)
-        else:
-            am = re.search(r"([£$€])\s*(\d+(?:[.,]\d+)?)", tail)
-            if am:
-                amount = _amount_in_currency(
-                    float(am.group(2).replace(",", ".")), am.group(1), currency)
         found.append({"date": pay, "ex": ex, "amount": amount})
     return _merge_same_day(found)
 
@@ -1827,7 +1912,7 @@ def _pay_fetch_one(tkr, currency, today):
             if items:
                 return {
                     "checked": datetime.now(timezone.utc).isoformat(),
-                    "src": name, "err": "; ".join(errs) or None,
+                    "pv": PAY_PARSER_VERSION, "src": name, "err": "; ".join(errs) or None,
                     "items": [{"date": i["date"].isoformat(),
                                "ex": i["ex"].isoformat(),
                                "amount": i["amount"], "src": name}
@@ -1839,6 +1924,7 @@ def _pay_fetch_one(tkr, currency, today):
     # ziadny zdroj nic nenasiel -> zaznam bez poloziek (ak boli len 'ziadna
     # vyplata' a nie chyby siete, je to normalny stav)
     return {"checked": datetime.now(timezone.utc).isoformat(),
+            "pv": PAY_PARSER_VERSION,
             "src": None, "err": "; ".join(errs) or None,
             "note": "; ".join(notes) or None, "items": [],
             "throttled": throttled}
@@ -1873,7 +1959,7 @@ def _pay_sheet_ws():
         return sh.worksheet(PAY_SHEET_TITLE)
     except Exception:
         try:
-            return sh.add_worksheet(title=PAY_SHEET_TITLE, rows=400, cols=5)
+            return sh.add_worksheet(title=PAY_SHEET_TITLE, rows=400, cols=7)
         except Exception:
             return None
 
@@ -1891,9 +1977,18 @@ def _pay_store_load_sheet():
                 items = json.loads(row[3]) if row[3] else []
             except Exception:
                 items = []
+            try:
+                manual = json.loads(row[5]) if len(row) > 5 and row[5] else []
+            except Exception:
+                manual = []
+            try:
+                pv = int(row[6]) if len(row) > 6 and row[6] else None
+            except Exception:
+                pv = None
             out[row[0].strip()] = {
                 "checked": row[1], "src": row[2] or None, "items": items,
                 "err": (row[4] if len(row) > 4 and row[4] else None),
+                "manual": manual, "pv": pv,
             }
         return out
     except Exception:
@@ -1905,12 +2000,16 @@ def _pay_store_save_sheet(store):
         wsp = _pay_sheet_ws()
         if wsp is None:
             return False
-        rows = [["Ticker", "Checked", "Src", "ItemsJSON", "Err"]]
+        rows = [["Ticker", "Checked", "Src", "ItemsJSON", "Err",
+                 "ManualJSON", "PV"]]
         for tkr in sorted(store):
             e = store[tkr]
             rows.append([tkr, e.get("checked", ""), e.get("src") or "",
                          json.dumps(e.get("items", []), ensure_ascii=False),
-                         e.get("err") or ""])
+                         e.get("err") or "",
+                         json.dumps(e.get("manual", []), ensure_ascii=False)
+                         if e.get("manual") else "",
+                         e.get("pv") or ""])
         wsp.clear()
         wsp.update(rows, value_input_option="RAW")
         return True
@@ -1942,6 +2041,9 @@ def _pay_entry_due(tkr, entry, now, rec=None):
     if entry is None:
         # Yahoo uz ma potvrdeny datum -> web netreba (okrem dividendmax akcii)
         return not (yahoo_has and tkr not in DMAX_URLS)
+    if (entry.get("pv") != PAY_PARSER_VERSION
+            and (tkr in DMAX_URLS or entry.get("src") == "dividendmax")):
+        return True                   # ulozene starsou verziou citania
     try:
         chk = datetime.fromisoformat(entry["checked"])
     except Exception:
@@ -2003,6 +2105,8 @@ def refresh_pay_store(holdings, stock_records, force=False):
             old = store.get(tkr)
             if entry.get("throttled"):
                 n_throttled += 1
+            if old and old.get("manual"):
+                entry["manual"] = old["manual"]   # rucne upravy sa nestratia
             if not entry["items"] and entry.get("err") and old and old.get("items"):
                 # docasna chyba webu - zachovat predosle nacitane datumy
                 kept = dict(old)
@@ -2010,7 +2114,8 @@ def refresh_pay_store(holdings, stock_records, force=False):
                 kept["err"] = entry["err"]
                 kept["throttled"] = entry.get("throttled", False)
                 entry = kept
-            elif old is None or old.get("items") != entry["items"]:
+            elif (old is None or old.get("items") != entry["items"]
+                  or old.get("pv") != entry.get("pv")):
                 changed = True
             store[tkr] = entry
             n_done += 1
@@ -2022,26 +2127,85 @@ def refresh_pay_store(holdings, stock_records, force=False):
     return n_done
 
 
-def confirmed_pay_items(tkr, rec, today):
-    """Zoznam potvrdenych buducich vyplat pre ticker: z uloziska (dividendmax /
-    digrin) + Yahoo 'dividendDate', ak je buduci a este v zozname nie je.
-    Vrati [{"date": date, "amount": float|None, "src": str}] zoradene."""
-    out = []
-    ent = _pay_store_get().get(tkr)
-    if ent:
-        for it in ent.get("items", []):
-            try:
-                d = date.fromisoformat(it["date"])
-            except Exception:
-                continue
-            if d >= today:
-                out.append({"date": d, "amount": it.get("amount"),
-                            "src": it.get("src") or "dividendmax"})
+def pay_items_merged(tkr, rec, today, include_past=False):
+    """Vsetky znamene vyplaty pre ticker: ulozisko (dividendmax / digrin),
+    Yahoo 'dividendDate' a RUCNE upravy (maju prednost). Vrati
+    [{"date","ex","amount","src","orig"}] zoradene podla datumu; 'orig' je
+    povodny (automaticky) datum polozky, ktoru rucna uprava prepisuje."""
+    ent = _pay_store_get().get(tkr) or {}
+    auto = []
+    for it in ent.get("items", []):
+        d = _to_date(it.get("date"))
+        if d is None:
+            continue
+        auto.append({"date": d,
+                     "ex": _to_date(it.get("ex")) if it.get("ex") else None,
+                     "amount": it.get("amount"),
+                     "src": it.get("src") or "dividendmax", "orig": d})
     yd = rec.get("pay_div_date")
-    if yd is not None and yd >= today and not any(o["date"] == yd for o in out):
-        out.append({"date": yd, "amount": None, "src": "yahoo"})
+    if yd is not None and not any(a["date"] == yd for a in auto):
+        auto.append({"date": yd, "ex": rec.get("ex_div_date"),
+                     "amount": None, "src": "yahoo", "orig": yd})
+    by_orig, extra = {}, []
+    for m in ent.get("manual") or []:
+        d = _to_date(m.get("date"))
+        if d is None:
+            continue
+        o = _to_date(m.get("orig")) if m.get("orig") else None
+        mi = {"date": d, "ex": None, "amount": m.get("amount"),
+              "src": "rucne", "orig": o}
+        if o is not None:
+            by_orig[o] = mi
+        else:
+            extra.append(mi)
+    out, used = [], set()
+    for a in auto:
+        m = by_orig.get(a["orig"])
+        if m is not None:
+            used.add(a["orig"])
+            out.append({"date": m["date"], "ex": a["ex"],
+                        "amount": (m["amount"] if m["amount"] is not None
+                                   else a["amount"]),
+                        "src": "rucne", "orig": a["orig"]})
+        else:
+            out.append(a)
+    for o, m in by_orig.items():
+        if o not in used:
+            extra.append(m)
+    out.extend(extra)
+    if not include_past:
+        out = [o for o in out if o["date"] >= today]
     out.sort(key=lambda o: o["date"])
     return out
+
+
+def confirmed_pay_items(tkr, rec, today):
+    """Potvrdene buduce vyplaty pre ticker (vratane rucnych uprav)."""
+    return pay_items_merged(tkr, rec, today)
+
+
+def save_manual_pay(tkr, orig_date, new_date, new_amount, reset=False):
+    """Ulozi (alebo zrusi) rucnu upravu datumu/sumy jednej vyplaty do
+    uloziska (subor + Google Sheets). 'orig_date' je povodny automaticky
+    datum polozky (None pri odhade)."""
+    store = _pay_store_get()
+    ent = store.get(tkr)
+    if ent is None:
+        ent = {"checked": "1970-01-01T00:00:00+00:00", "src": None,
+               "items": [], "err": None, "manual": []}
+        store[tkr] = ent
+    manual = [m for m in (ent.get("manual") or [])
+              if not ((orig_date is not None
+                       and _to_date(m.get("orig")) == orig_date)
+                      or (orig_date is None and not m.get("orig")))]
+    if not reset:
+        manual.append({"orig": orig_date.isoformat() if orig_date else None,
+                       "date": new_date.isoformat(),
+                       "amount": (float(new_amount)
+                                  if new_amount is not None else None)})
+    ent["manual"] = manual
+    _pay_store_save_file(store)
+    _pay_store_save_sheet(store)
 
 
 # ── Evidencia SKUTOCNE prijatych dividend (zapisuje sa do Google Sheets) ────
@@ -2064,7 +2228,7 @@ def _to_float(v):
     if v is None:
         return None
     if isinstance(v, (int, float)):
-        return float(v)
+        return None if v != v else float(v)
     t = str(v).replace("\xa0", "").replace(" ", "").strip()
     if not t:
         return None
@@ -2210,7 +2374,6 @@ def record_due_payouts(holdings, stock_records, today):
     Vrati pocet novych zaznamov."""
     ledger = payout_ledger()
     keys = {(r["ticker"], r["pay"]) for r in ledger}
-    store = _pay_store_get()
     fx_cache = {}
     cands = []
     for tkr, qty in holdings.items():
@@ -2218,17 +2381,12 @@ def record_due_payouts(holdings, stock_records, today):
         if rec is None:
             continue
         items = []
-        ent = store.get(tkr)
-        if ent:
-            for it in ent.get("items", []):
-                pd_, ex_ = _to_date(it.get("date")), _to_date(it.get("ex"))
-                if pd_ and ex_:
-                    items.append({"pay": pd_, "ex": ex_,
-                                  "amount": it.get("amount"),
-                                  "src": it.get("src") or "dividendmax"})
-        yp, yx = rec.get("pay_div_date"), rec.get("ex_div_date")
-        if yp and yx and not any(i["pay"] == yp for i in items):
-            items.append({"pay": yp, "ex": yx, "amount": None, "src": "yahoo"})
+        for it in pay_items_merged(tkr, rec, today, include_past=True):
+            ex_ = it["ex"] or rec.get("ex_div_date")
+            if ex_ is None:
+                continue
+            items.append({"pay": it["date"], "ex": ex_,
+                          "amount": it["amount"], "src": it["src"]})
         for it in items:
             if (it["ex"] <= today and it["pay"] >= it["ex"]
                     and it["pay"] >= today - timedelta(days=7)
@@ -2384,6 +2542,7 @@ st.markdown(
     ".src-yahoo{background:#fff1dc;color:#b8630a;}"
     ".src-digrin{background:#f2e9fb;color:#7c3fc9;}"
     ".src-odhad{background:#eceff1;color:#6b7280;}"
+    ".src-rucne{background:#dff3f7;color:#0b7285;}"
     ".growth-pos{color:#15a24a;font-weight:600;}"
     ".growth-neg{color:#e0362b;font-weight:600;}"
     ".section-note{font-size:15px;line-height:1.55;color:#5b6472;"
@@ -2666,7 +2825,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v22"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v24"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3536,9 +3695,10 @@ st.markdown(
     "<div class=\"section-note\">Datumy vyplat sa automaticky nacitavaju z "
     "dividendmax.com, digrin.com a Yahoo, ukladaju sa trvalo a potvrdene "
     "datumy sa nepreverujuju znova, kym nepreidu. Stlpec Status ukazuje "
-    "zdroj datumu: Dividendmax, Yahoo alebo Digrin. Siva 'Odhad' = akcia "
-    "zatial nema potvrdeny datum; odhad je najblizsi Ex-Div termin + "
-    + str(PAYOUT_LAG_DAYS_ESTIMATE) + " dni.</div>",
+    "zdroj datumu: zelena = Dividendmax, oranzova = Yahoo, fialova = Digrin, "
+    "modra = Rucne (tvoja uprava), siva = Odhad (akcia zatial nema potvrdeny "
+    "datum; odhad je najblizsi Ex-Div termin + "
+    + str(PAYOUT_LAG_DAYS_ESTIMATE) + " dni).</div>",
     unsafe_allow_html=True,
 )
 
@@ -3575,6 +3735,7 @@ else:
             pay_rows.append({
                 "ticker": tkr, "name": rec["name"],
                 "qty": float(qty), "pay_date": it["date"], "src": it["src"],
+                "orig": it.get("orig"),
                 "frequency": rec["frequency"], "pct_annual": pct_annual,
                 "last_div": last_div, "total_div": total_div,
                 "currency": rec["currency"],
@@ -3587,10 +3748,15 @@ else:
         _pay_total = len(pay_rows)
         _pay_lim = st.session_state.get("pay_rows_limit", 30)
         pay_rows = pay_rows[:_pay_lim]
-        pay_row_parts = []
+        _SRC_LABEL = {
+            "dividendmax": "\U0001F7E2 Dividendmax",
+            "yahoo": "\U0001F7E0 Yahoo",
+            "digrin": "\U0001F7E3 Digrin",
+            "odhad": "\u26AA Odhad",
+            "rucne": "\U0001F535 Rucne",
+        }
+        _tbl_rows = []
         for r in pay_rows:
-            pct_annual_str = fmt_pct(r["pct_annual"])
-            last_div_str = fmt_curr(r["last_div"], r["currency"], 4)
             if r["total_div"] is not None:
                 curr = r["currency"]
                 total_div_str = fmt_curr(r["total_div"], curr, 2)
@@ -3601,38 +3767,72 @@ else:
                                           + fmt_num(r["total_div"] * r3, 2) + ")")
             else:
                 total_div_str = "N/A"
-            _src_cls, _src_txt = {
-                "dividendmax": ("src-dmax", "Dividendmax"),
-                "yahoo": ("src-yahoo", "Yahoo"),
-                "digrin": ("src-digrin", "Digrin"),
-                "odhad": ("src-odhad", "Odhad"),
-            }.get(r["src"], ("src-dmax", str(r["src"])))
-            status_html = ("<span class=\"freq-badge " + _src_cls + "\">"
-                           + _src_txt + "</span>")
-            pay_row_parts.append(
-                "<tr>"
-                "<td class=\"code-cell\">" + r["ticker"] + "</td>"
-                "<td>" + r["name"] + "</td>"
-                "<td>" + format_qty(r["qty"]) + " ks</td>"
-                "<td>" + r["pay_date"].strftime("%d/%m/%y") + "</td>"
-                "<td>" + status_html + "</td>"
-                "<td>" + freq_badge_html(r["frequency"]) + "</td>"
-                "<td>" + pct_annual_str + "</td>"
-                "<td>" + last_div_str + "</td>"
-                "<td>" + total_div_str + "</td>"
-                "</tr>"
-            )
-        st.markdown(
-            "<div class=\"board-wrap\"><table class=\"board\"><thead><tr>"
-            "<th>Ticker</th><th>Meno</th><th>Mnozstvo</th>"
-            "<th>Div Date</th><th>Status</th><th>Frekvencia</th>"
-            "<th>Rocny Div Yield</th>"
-            "<th>Dividenda/akcia</th><th>Dividenda/spolu</th>"
-            "</tr></thead><tbody>"
-            + "".join(pay_row_parts)
-            + "</tbody></table></div>",
-            unsafe_allow_html=True,
+            _tbl_rows.append({
+                "Ticker": r["ticker"], "Meno": r["name"],
+                "Mnozstvo": format_qty(r["qty"]) + " ks",
+                "Div Date": r["pay_date"],
+                "Status": _SRC_LABEL.get(r["src"], str(r["src"])),
+                "Frekvencia": str(r["frequency"]),
+                "Rocny Div Yield": fmt_pct(r["pct_annual"]),
+                "Dividenda/akcia": (float(r["last_div"])
+                                    if r["last_div"] is not None else None),
+                "Mena": r["currency"],
+                "Dividenda/spolu": total_div_str,
+            })
+        _df_pay = pd.DataFrame(_tbl_rows)
+        if st.session_state.get("_pay_flash"):
+            st.success(st.session_state.pop("_pay_flash"))
+        st.caption(
+            "Datum vyplaty a sumu na akciu mozes prepisat priamo v tabulke "
+            "(dvojklik na bunku). Ulozi sa hned do Google Sheets a ma prednost "
+            "pred automatickym nacitanim (Status 'Rucne'). Suma je na 1 akciu "
+            "v mene akcie (londynske akcie v pencoch, GBp).")
+        _pkey = ("pay_editor_" + str(st.session_state.get("pay_edit_ver", 0))
+                 + "_" + str(len(pay_rows)))
+        _pay_ed = st.data_editor(
+            _df_pay,
+            column_config={
+                "Div Date": st.column_config.DateColumn(
+                    "Div Date", format="DD/MM/YY",
+                    help="Datum vyplaty - dvojklik a prepis"),
+                "Dividenda/akcia": st.column_config.NumberColumn(
+                    "Dividenda/akcia", format="%.4f",
+                    help="Suma na 1 akciu - dvojklik a prepis"),
+            },
+            disabled=["Ticker", "Meno", "Mnozstvo", "Status", "Frekvencia",
+                      "Rocny Div Yield", "Mena", "Dividenda/spolu"],
+            hide_index=True, use_container_width=True,
+            height=min(40 + 35 * len(_df_pay), 1250), key=_pkey,
         )
+        # porovnanie po pozicii (editor zachovava poradie riadkov)
+        _pchg = []
+        for _i in range(len(_df_pay)):
+            _src_row = pay_rows[_i]
+            _nd = _to_date(_pay_ed.iloc[_i]["Div Date"])
+            _na = _to_float(_pay_ed.iloc[_i]["Dividenda/akcia"])
+            _od, _oa = _src_row["pay_date"], _src_row["last_div"]
+            _date_chg = _nd is not None and _nd != _od
+            _amt_chg = (_na is not None and (
+                _oa is None or abs(_na - float(_oa)) > 1e-9))
+            if _date_chg or _amt_chg:
+                _pchg.append((_src_row, _nd or _od,
+                              _na if _na is not None else _oa))
+        if _pchg:
+            try:
+                for _sr, _nd2, _na2 in _pchg:
+                    save_manual_pay(_sr["ticker"], _sr["orig"], _nd2, _na2)
+                st.session_state["pay_edit_ver"] = (
+                    st.session_state.get("pay_edit_ver", 0) + 1)
+                st.session_state["_pay_flash"] = (
+                    "Ulozene (rucne): " + ", ".join(
+                        c[0]["ticker"] for c in _pchg)
+                    + ". Zapisane do Google Sheets (list 'PayDates').")
+            except Exception as _e:
+                st.error("Ulozenie zlyhalo: " + type(_e).__name__ + ": "
+                         + str(_e)[:150])
+            else:
+                st.rerun()
+
         _mb1, _mb2, _mb3 = st.columns([1, 1, 4])
         with _mb1:
             if _pay_total > _pay_lim and st.button(
@@ -3646,6 +3846,25 @@ else:
         with _mb3:
             st.caption("Zobrazene " + str(min(_pay_lim, _pay_total))
                        + " z " + str(_pay_total) + " vyplat.")
+
+        _man_rows = [r for r in pay_rows if r["src"] == "rucne"]
+        if _man_rows:
+            _opts = {r["ticker"] + " (" + r["pay_date"].strftime("%d/%m/%y")
+                     + ")": r for r in _man_rows}
+            _sel_rev = st.multiselect(
+                "Vratit rucne upravene polozky na automaticke udaje",
+                list(_opts), key="pay_revert_sel")
+            if _sel_rev and st.button("Vratit na automaticke",
+                                      key="pay_revert_btn"):
+                for _k in _sel_rev:
+                    save_manual_pay(_opts[_k]["ticker"], _opts[_k]["orig"],
+                                    None, None, reset=True)
+                st.session_state["pay_edit_ver"] = (
+                    st.session_state.get("pay_edit_ver", 0) + 1)
+                st.session_state["_pay_flash"] = (
+                    "Vratene na automaticke: " + ", ".join(_sel_rev))
+                st.session_state.pop("pay_revert_sel", None)
+                st.rerun()
 
     # Stav nacitavania - pre kontrolu, bez nutnosti prechadzat akcie
     _ps = _pay_store_get()
