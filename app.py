@@ -2248,7 +2248,8 @@ def _to_date(v):
     if isinstance(v, date):
         return v
     t = str(v).strip().lstrip("'")
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d. %m. %Y", "%d/%m/%Y"):
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d. %m. %Y", "%d/%m/%Y",
+                "%d/%m/%y", "%d.%m.%y", "%d. %m. %y"):
         try:
             return datetime.strptime(t, fmt).date()
         except Exception:
@@ -2825,7 +2826,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v26"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v27"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3779,12 +3780,12 @@ else:
             _tbl_rows.append({
                 "Ticker": r["ticker"], "Meno": r["name"],
                 "Mnozstvo": format_qty(r["qty"]) + " ks",
-                "Div Date": r["pay_date"],
+                "Div Date": r["pay_date"].strftime("%d/%m/%y"),
                 "Status": _SRC_LABEL.get(r["src"], str(r["src"])),
                 "Frekvencia": str(r["frequency"]),
                 "Rocny Div Yield": fmt_pct(r["pct_annual"]),
-                "Dividenda/akcia": (float(r["last_div"])
-                                    if r["last_div"] is not None else None),
+                "Dividenda/akcia": (fmt_num(float(r["last_div"]), 4)
+                                    if r["last_div"] is not None else ""),
                 "Mena": r["currency"],
                 "Dividenda/spolu": total_div_str,
             })
@@ -3805,31 +3806,47 @@ else:
         _pay_ed = st.data_editor(
             _styled_pay,
             column_config={
-                "Div Date": st.column_config.DateColumn(
-                    "Div Date", format="DD/MM/YY",
-                    help="Datum vyplaty - dvojklik a prepis"),
-                "Dividenda/akcia": st.column_config.NumberColumn(
-                    "Dividenda/akcia", format="%.4f",
-                    help="Suma na 1 akciu - dvojklik a prepis"),
+                "Div Date": st.column_config.TextColumn(
+                    "Div Date",
+                    help="Datum vyplaty - dvojklik a prepis (napr. 15/11/26). "
+                         "Ulozi sa hned do Google Sheets."),
+                "Dividenda/akcia": st.column_config.TextColumn(
+                    "Dividenda/akcia",
+                    help="Suma na 1 akciu - dvojklik a prepis (napr. 0,8181). "
+                         "Ulozi sa hned do Google Sheets."),
             },
             disabled=["Ticker", "Meno", "Mnozstvo", "Status", "Frekvencia",
                       "Rocny Div Yield", "Mena", "Dividenda/spolu"],
             hide_index=True, use_container_width=True,
             height=min(40 + 35 * len(_df_pay), 1250), key=_pkey,
         )
-        # porovnanie po pozicii (editor zachovava poradie riadkov)
+        # porovnanie po pozicii (editor zachovava poradie riadkov); rovnako
+        # ako pri Mnozstve v 'Moje akcie' su upravitelne bunky textove.
         _pchg = []
+        _pbad = []
         for _i in range(len(_df_pay)):
             _src_row = pay_rows[_i]
-            _nd = _to_date(_pay_ed.iloc[_i]["Div Date"])
-            _na = _to_float(_pay_ed.iloc[_i]["Dividenda/akcia"])
-            _od, _oa = _src_row["pay_date"], _src_row["last_div"]
-            _date_chg = _nd is not None and _nd != _od
-            _amt_chg = (_na is not None and (
-                _oa is None or abs(_na - float(_oa)) > 1e-9))
-            if _date_chg or _amt_chg:
-                _pchg.append((_src_row, _nd or _od,
-                              _na if _na is not None else _oa))
+            _old_d = str(_df_pay.iloc[_i]["Div Date"]).strip()
+            _new_d = str(_pay_ed.iloc[_i]["Div Date"]).strip()
+            _old_a = str(_df_pay.iloc[_i]["Dividenda/akcia"]).strip()
+            _new_a = str(_pay_ed.iloc[_i]["Dividenda/akcia"]).strip()
+            if _new_d == _old_d and _new_a == _old_a:
+                continue
+            _nd, _na = _src_row["pay_date"], _src_row["last_div"]
+            if _new_d != _old_d:
+                _nd = _to_date(_new_d)
+                if _nd is None:
+                    _pbad.append(_src_row["ticker"] + " (datum '" + _new_d + "')")
+                    continue
+            if _new_a != _old_a:
+                _na = _to_float(_new_a)
+                if _na is None or _na < 0:
+                    _pbad.append(_src_row["ticker"] + " (suma '" + _new_a + "')")
+                    continue
+            _pchg.append((_src_row, _nd, _na))
+        if _pbad:
+            st.warning("Neplatna hodnota: " + ", ".join(_pbad)
+                       + ". Datum zadaj napr. 15/11/26, sumu napr. 0,8181.")
         if _pchg:
             try:
                 for _sr, _nd2, _na2 in _pchg:
