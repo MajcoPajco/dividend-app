@@ -2428,6 +2428,22 @@ def record_due_payouts(holdings, stock_records, today):
     return len(new_rows)
 
 
+def fx_rate_cached(cur):
+    """Kurz meny do USD, drzany v session (1 h; pri nezdare 10 min a
+    posledna dobra hodnota ostava) - aby sa cisla v tabulkach medzi
+    prekreslenimi nemenili a aby sa sietovy dopyt nevolal pri kazdom riadku."""
+    store = st.session_state.setdefault("_fx_cache", {})
+    now = time.time()
+    e = store.get(cur)
+    if e and now - e[0] < (3600 if e[1] is not None else 600):
+        return e[1]
+    r = get_fx_to_usd_rate(cur)
+    if r is None and e and e[1] is not None:
+        r = e[1]
+    store[cur] = (now, r)
+    return r
+
+
 def make_usd_bar_chart(series, x_title, height=320, bar_color="#2f6fed"):
     """
     Postavi Altair bar chart so zvacsenym pismom na osiach a s tooltip-om
@@ -2826,7 +2842,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v27"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v28  |  streamlit " + str(getattr(st, "__version__", "?"))
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3771,7 +3787,7 @@ else:
                 curr = r["currency"]
                 total_div_str = fmt_curr(r["total_div"], curr, 2)
                 if curr.upper() != "USD":
-                    r3 = get_fx_to_usd_rate(curr)
+                    r3 = fx_rate_cached(curr)
                     if r3:
                         total_div_str += (" (~ USD "
                                           + fmt_num(r["total_div"] * r3, 2) + ")")
@@ -3790,6 +3806,19 @@ else:
                 "Dividenda/spolu": total_div_str,
             })
         _df_pay = pd.DataFrame(_tbl_rows)
+        # Tabulka (aj mapovanie riadkov) sa "zmrazi" medzi upravami: editor
+        # tak dostava stale rovnake data a nestrati rozpisanu upravu, ked sa
+        # na pozadi zmeni cena/kurz/nacitane udaje. Obnovi sa po ulozeni
+        # upravy, zmene poctu riadkov alebo najneskor po 5 minutach.
+        _sig = (st.session_state.get("pay_edit_ver", 0), _pay_lim)
+        _snap = st.session_state.get("_pay_snap")
+        if (_snap is not None and _snap["sig"] == _sig
+                and time.time() - _snap["ts"] < 300):
+            pay_rows, _df_pay = _snap["rows"], _snap["df"]
+        else:
+            st.session_state["_pay_snap"] = {
+                "sig": _sig, "ts": time.time(),
+                "rows": pay_rows, "df": _df_pay}
         if st.session_state.get("_pay_flash"):
             st.success(st.session_state.pop("_pay_flash"))
         st.caption(
