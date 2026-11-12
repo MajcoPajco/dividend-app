@@ -2825,7 +2825,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v24"
+    return "Data k: " + ", ".join(_parts) + "  |  kod v25"
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3749,12 +3749,21 @@ else:
         _pay_lim = st.session_state.get("pay_rows_limit", 30)
         pay_rows = pay_rows[:_pay_lim]
         _SRC_LABEL = {
-            "dividendmax": "\U0001F7E2 Dividendmax",
-            "yahoo": "\U0001F7E0 Yahoo",
-            "digrin": "\U0001F7E3 Digrin",
-            "odhad": "\u26AA Odhad",
-            "rucne": "\U0001F535 Rucne",
+            "dividendmax": "Dividendmax", "yahoo": "Yahoo", "digrin": "Digrin",
+            "odhad": "Odhad", "rucne": "Rucne",
         }
+        _SRC_STYLE = {
+            "Dividendmax": "background-color:#e3f7ea;color:#1c9350;",
+            "Yahoo": "background-color:#fff1dc;color:#b8630a;",
+            "Digrin": "background-color:#f2e9fb;color:#7c3fc9;",
+            "Rucne": "background-color:#dff3f7;color:#0b7285;",
+            "Odhad": "background-color:#eceff1;color:#6b7280;",
+        }
+
+        def _style_src(val):
+            st_ = _SRC_STYLE.get(str(val), "")
+            return (st_ + "font-weight:600;") if st_ else ""
+
         _tbl_rows = []
         for r in pay_rows:
             if r["total_div"] is not None:
@@ -3789,8 +3798,12 @@ else:
             "v mene akcie (londynske akcie v pencoch, GBp).")
         _pkey = ("pay_editor_" + str(st.session_state.get("pay_edit_ver", 0))
                  + "_" + str(len(pay_rows)))
+        try:
+            _styled_pay = _df_pay.style.map(_style_src, subset=["Status"])
+        except AttributeError:
+            _styled_pay = _df_pay.style.applymap(_style_src, subset=["Status"])
         _pay_ed = st.data_editor(
-            _df_pay,
+            _styled_pay,
             column_config={
                 "Div Date": st.column_config.DateColumn(
                     "Div Date", format="DD/MM/YY",
