@@ -2369,6 +2369,70 @@ def _payout_rewrite(rows):
                   value_input_option="USER_ENTERED")
 
 
+def _amount_suspicious(per, last):
+    """Suma na akciu, ktora je >= 5x vyssia alebo <= 1/5 poslednej znamej
+    dividendy, je skoro iste chyba jednotiek (centy vs. doláre)."""
+    try:
+        if per is None or last is None or float(last) <= 0:
+            return False
+        ratio = float(per) / float(last)
+        return ratio >= 5 or ratio <= 0.2
+    except Exception:
+        return False
+
+
+def _ledger_fixes(rows, stock_records, today):
+    """Opravy starych automatickych zaznamov z dividendmaxu (zdroj presne
+    'dividendmax' = zapisane starsim, chybnym citanim, ktore bralo
+    'Forecast amount' alebo zle jednotky): suma sa nahradi aktualne nacitanou
+    'Decl. amount'. Rucne upravene riadky (iny zdroj) sa nemenia."""
+    fixes = []
+    for r in rows:
+        if r.get("source") != "dividendmax":
+            continue
+        rec = stock_records.get(r["ticker"])
+        if rec is None:
+            continue
+        exp = None
+        for it in pay_items_merged(r["ticker"], rec, today, include_past=True):
+            if it["date"] == r["pay"] and it["amount"] is not None:
+                exp = float(it["amount"])
+                break
+        if exp is not None and exp > 0:
+            if abs(exp - r["per_share"]) > 1e-9:
+                fixes.append((r, exp, "dividendmax v2"))
+            else:
+                fixes.append((r, r["per_share"], "dividendmax v2"))
+        elif _amount_suspicious(r["per_share"], rec.get("last_div_amount")):
+            fixes.append((r, float(rec["last_div_amount"]), "yahoo (opravene)"))
+    return fixes
+
+
+def repair_ledger(stock_records, today):
+    """Opravi stare chybne automaticke zaznamy a zapise ich do Sheetu."""
+    ledger = payout_ledger()
+    if not _ledger_fixes(ledger, stock_records, today):
+        return 0
+    fresh = payout_ledger(force=True)
+    fixes = _ledger_fixes(fresh, stock_records, today)
+    n_changed = 0
+    for r, new_per, new_src in fixes:
+        if abs(new_per - r["per_share"]) > 1e-9:
+            n_changed += 1
+        r["per_share"] = new_per
+        r["source"] = new_src
+    if fixes:
+        try:
+            _payout_rewrite(fresh)
+        except Exception as e:
+            st.session_state["_payout_status"] = (
+                "Oprava evidencie zlyhala: " + type(e).__name__ + ": "
+                + str(e)[:120])
+        _payout_file_save(fresh)
+        st.session_state["_payout_ledger"] = fresh
+    return n_changed
+
+
 def record_due_payouts(holdings, stock_records, today):
     """Zapise do evidencie vyplaty, ktorych ex-div datum uz nastal a ktore
     tam este nie su. Pocet akcii = aktualny pocet (ku ex-div datumu).
@@ -2377,6 +2441,7 @@ def record_due_payouts(holdings, stock_records, today):
     keys = {(r["ticker"], r["pay"]) for r in ledger}
     fx_cache = {}
     cands = []
+    skipped = []
     for tkr, qty in holdings.items():
         rec = stock_records.get(tkr)
         if rec is None:
@@ -2393,7 +2458,11 @@ def record_due_payouts(holdings, stock_records, today):
                     and it["pay"] >= today - timedelta(days=7)
                     and (tkr, it["pay"]) not in keys):
                 per = it["amount"]
-                src = it["src"]
+                src = "dividendmax v2" if it["src"] == "dividendmax" else it["src"]
+                if per is not None and _amount_suspicious(
+                        per, rec.get("last_div_amount")):
+                    skipped.append(tkr + " (" + str(per) + ")")
+                    continue
                 if per is None:
                     per = rec.get("last_div_amount")
                     src += " (suma odhad)"
@@ -2409,6 +2478,10 @@ def record_due_payouts(holdings, stock_records, today):
                     "recorded": datetime.now(timezone.utc).strftime(
                         "%Y-%m-%d %H:%M"),
                 })
+    if skipped:
+        st.session_state["_payout_status"] = (
+            "Preskocene (suma na akciu vyzera ako chyba jednotiek, "
+            "pridaj rucne): " + ", ".join(skipped[:10]))
     if not cands:
         return 0
     # znova nacitat cerstvy stav (aby sa nic nezdvojilo ani neprepisalo)
@@ -2842,7 +2915,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v28  |  streamlit " + str(getattr(st, "__version__", "?"))
+    return "Data k: " + ", ".join(_parts) + "  |  kod v30  |  streamlit " + str(getattr(st, "__version__", "?"))
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
@@ -3999,15 +4072,19 @@ if not st.session_state.holdings:
 else:
     _today_l = datetime.now(timezone.utc).date()
     try:
+        _n_fix = repair_ledger(stock_records, _today_l)
         _n_new = record_due_payouts(
             st.session_state.holdings, stock_records, _today_l)
     except Exception as _e:
         _n_new = 0
+        _n_fix = 0
         st.session_state["_payout_status"] = (
             "Zaznam zlyhal: " + type(_e).__name__ + ": " + str(_e)[:120])
     _ledger = payout_ledger()
     if st.session_state.get("_payout_status"):
         st.warning(st.session_state["_payout_status"])
+    if _n_fix:
+        st.info("Opravenych starych zaznamov so zlou sumou: " + str(_n_fix))
     if _n_new:
         st.success("Do evidencie pridanych novych zaznamov: " + str(_n_new))
 
@@ -4046,8 +4123,17 @@ else:
         _prev = _df_l[(_df_l["year"] == _sel_year - 1) & _df_l["received"]]
         _tot_prev = _prev["usd"].sum()
 
+        _today_rows = _df_l[_df_l["pay"] == _today_l]
         _c1, _c2 = st.columns([1, 3])
         with _c1:
+            st.metric(
+                "Dnes (" + _today_l.strftime("%d/%m/%Y") + ") dostanes",
+                fmt_curr(_today_rows["usd"].sum(), "USD", 2),
+                help=("Sucet dividend s datumom vyplaty dnes: "
+                      + ", ".join(sorted(_today_rows["ticker"].unique()))
+                      if len(_today_rows) else
+                      "Dnes nie je zaznamenana ziadna vyplata."),
+            )
             st.metric(
                 "Prijate v roku " + str(_sel_year), fmt_curr(_tot_y, "USD", 2),
                 delta=((fmt_curr(_tot_y - _tot_prev, "USD", 2)
@@ -4125,12 +4211,16 @@ else:
                 _cur = str(_r.get("Mena") or "").strip() or (
                     (stock_records.get(_tk) or {}).get("currency", "USD"))
                 _o = _old.get((_tk, _pd))
+                _edited_vals = (_o is not None and (
+                    abs(_o["qty"] - _q) > 1e-9
+                    or abs(_o["per_share"] - _ps) > 1e-12))
                 _new_rows.append({
                     "pay": _pd, "ex": (_o or {}).get("ex"), "ticker": _tk,
                     "qty": _q, "per_share": _ps, "currency": _cur,
                     "fx": ((_o or {}).get("fx") if _o and _o.get("currency") == _cur
                            else get_fx_to_usd_rate(_cur)),
-                    "source": (_o or {}).get("source") or "rucne",
+                    "source": ("rucne" if (_edited_vals or _o is None)
+                               else ((_o or {}).get("source") or "rucne")),
                     "recorded": (_o or {}).get("recorded")
                     or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
                 })
