@@ -1094,6 +1094,9 @@ def _parse_stock_info(ticker, info, dividends):
         "dividend_yield_pct": dividend_yield_pct,
         "frequency": frequency,
         "dividends_history": dividends,
+        "sector": (info.get("sector")
+                   or ("ETF" if str(info.get("quoteType") or "").upper()
+                       in ("ETF", "MUTUALFUND") else "")),
     }
 
 
@@ -2944,7 +2947,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return ("Data k: " + ", ".join(_parts) + "  |  kod v33  |  streamlit "
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v34  |  streamlit "
             + str(getattr(st, "__version__", "?"))
             + "  |  tema sec="
             + str(_theme_opt("theme.secondaryBackgroundColor")))
@@ -4565,3 +4568,325 @@ else:
                 unsafe_allow_html=True,
             )
 
+
+
+# ============================================================
+# SEKCIA 8 – ROZDELENIE PORTFOLIA (kolacove grafy)
+# ============================================================
+
+SECTOR_STORE_FILE = Path(__file__).resolve().parent / "sector_store.json"
+SECTOR_SHEET_TITLE = "Sectors"
+SECTOR_RETRY_HOURS = 24
+SECTOR_AUTO_PER_RUN = 8
+SECTOR_MANUAL_PER_RUN = 60
+
+SECTOR_SK = {
+    "Technology": "Technologie",
+    "Financial Services": "Financie",
+    "Healthcare": "Zdravotnictvo",
+    "Consumer Defensive": "Zakladna spotreba",
+    "Consumer Cyclical": "Cyklicka spotreba",
+    "Industrials": "Priemysel",
+    "Energy": "Energie",
+    "Utilities": "Verejne sluzby",
+    "Real Estate": "Nehnutelnosti",
+    "Basic Materials": "Zakladne materialy",
+    "Communication Services": "Komunikacie",
+    "ETF": "ETF / fond",
+}
+PIE_PALETTE = [
+    "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948",
+    "#b07aa1", "#ff9da7", "#9c755f", "#17becf", "#8cd17d", "#d37295",
+    "#499894", "#a0cbe8", "#ffbe7d", "#86bcb6", "#d4a6c8", "#fabfd2",
+    "#b6992d", "#79706e",
+]
+
+
+def _sector_store_load_file():
+    try:
+        with open(SECTOR_STORE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sector_store_save_file(store):
+    try:
+        with open(SECTOR_STORE_FILE, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _sector_sheet_ws():
+    ws, info = _connect_gsheet()
+    if ws is None or not info.get("has_header"):
+        return None
+    sh = ws.spreadsheet
+    try:
+        return sh.worksheet(SECTOR_SHEET_TITLE)
+    except Exception:
+        try:
+            return sh.add_worksheet(title=SECTOR_SHEET_TITLE, rows=400, cols=4)
+        except Exception:
+            return None
+
+
+def _sector_store_load_sheet():
+    try:
+        wss = _sector_sheet_ws()
+        if wss is None:
+            return {}
+        out = {}
+        for row in wss.get_all_values()[1:]:
+            if len(row) < 2 or not row[0].strip():
+                continue
+            out[row[0].strip()] = {
+                "sector": row[1],
+                "industry": row[2] if len(row) > 2 else "",
+                "checked": row[3] if len(row) > 3 else "",
+            }
+        return out
+    except Exception:
+        return {}
+
+
+def _sector_store_save_sheet(store):
+    try:
+        wss = _sector_sheet_ws()
+        if wss is None:
+            return False
+        rows = [["Ticker", "Sector", "Industry", "Checked"]]
+        for tkr in sorted(store):
+            e = store[tkr]
+            rows.append([tkr, e.get("sector", ""), e.get("industry", ""),
+                         e.get("checked", "")])
+        wss.clear()
+        wss.update(rows, value_input_option="RAW")
+        return True
+    except Exception:
+        return False
+
+
+def _sector_store_get():
+    if "_sector_store" not in st.session_state:
+        merged = dict(_sector_store_load_file())
+        for k, v in _sector_store_load_sheet().items():
+            if k not in merged or (
+                    v.get("sector") and not merged[k].get("sector")):
+                merged[k] = v
+        st.session_state["_sector_store"] = merged
+    return st.session_state["_sector_store"]
+
+
+def _fetch_sector_yahoo(tkr):
+    info = yf.Ticker(tkr).info or {}
+    sec = info.get("sector") or ""
+    if not sec and str(info.get("quoteType") or "").upper() in (
+            "ETF", "MUTUALFUND"):
+        sec = "ETF"
+    return sec, (info.get("industry") or "")
+
+
+def update_sector_store(holdings, records, max_fetch):
+    """Doplni sektory: najprv z uz nacitanych zaznamov (zadarmo), potom
+    dotiahne z Yahoo najviac max_fetch chybajucich. Vrati True ak sa
+    ulozisko zmenilo."""
+    store = _sector_store_get()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    changed = False
+    for tkr in holdings:
+        rec = records.get(tkr)
+        sec = (rec or {}).get("sector") or ""
+        if sec and store.get(tkr, {}).get("sector") != sec:
+            store[tkr] = {"sector": sec,
+                          "industry": store.get(tkr, {}).get("industry", ""),
+                          "checked": now_iso}
+            changed = True
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=SECTOR_RETRY_HOURS)).isoformat()
+    todo = []
+    for tkr in holdings:
+        e = store.get(tkr)
+        if e and e.get("sector"):
+            continue
+        if e and e.get("checked", "") > cutoff:
+            continue
+        todo.append(tkr)
+    for tkr in todo[:max_fetch]:
+        try:
+            sec, ind = _fetch_sector_yahoo(tkr)
+        except Exception as _e:
+            if ("RateLimit" in type(_e).__name__
+                    or "Too Many Requests" in str(_e)):
+                break
+            sec, ind = "", ""
+        store[tkr] = {"sector": sec, "industry": ind, "checked": now_iso}
+        changed = True
+        time.sleep(0.3)
+    if changed:
+        _sector_store_save_file(store)
+        _sector_store_save_sheet(store)
+    return changed
+
+
+def _pie_prepare(df, label_col):
+    d = df.copy()
+    d["_o"] = d[label_col].astype(str).str.startswith(("Ostatne", "Nezname"))
+    d = d.sort_values(["_o", "Hodnota (USD)"], ascending=[True, False])
+    d = d.drop(columns="_o").reset_index(drop=True)
+    total = float(d["Hodnota (USD)"].sum())
+    d["Podiel"] = d["Hodnota (USD)"] / total
+    d["Podiel (%)"] = d["Podiel"].apply(
+        lambda x: ("%.1f" % (x * 100)).replace(".", ",") + " %")
+    d["Popis"] = d["Podiel (%)"].where(d["Podiel"] >= 0.05, "")
+    d["Poradie"] = range(len(d))
+    d["Farba"] = [
+        "#b9bfc7" if str(lab).startswith(("Ostatne", "Nezname"))
+        else PIE_PALETTE[i % len(PIE_PALETTE)]
+        for i, lab in enumerate(d[label_col])
+    ]
+    return d
+
+
+def make_pie_chart(df, label_col, size=290):
+    """Farebny kolacovy (donut) graf: df ma stlpce label_col a 'Hodnota
+    (USD)'. Vacsie vyseky maju percento priamo v grafe; legenda je
+    samostatne (pie_legend_html)."""
+    d = _pie_prepare(df, label_col)
+    _ro = size // 2 - 10
+    theta = alt.Theta("Hodnota (USD):Q", stack=True)
+    order = alt.Order("Poradie:Q")
+    arcs = alt.Chart(d).mark_arc(
+        innerRadius=int(_ro * 0.42), outerRadius=_ro,
+        stroke="#ffffff", strokeWidth=1.5,
+    ).encode(
+        theta=theta, order=order,
+        color=alt.Color("Farba:N", scale=None, legend=None),
+        tooltip=[
+            alt.Tooltip(label_col + ":N", title=label_col),
+            alt.Tooltip("Hodnota (USD):Q", title="Hodnota (USD)",
+                        format="$,.0f"),
+            alt.Tooltip("Podiel (%):N", title="Podiel"),
+        ],
+    )
+    labels = alt.Chart(d).mark_text(
+        radius=int(_ro * 0.72), size=12, fontWeight="bold", color="#ffffff",
+    ).encode(theta=theta, order=order, text="Popis:N")
+    return (arcs + labels).properties(width=size, height=size)
+
+
+def pie_legend_html(df, label_col):
+    d = _pie_prepare(df, label_col)
+    items = []
+    for _, r in d.iterrows():
+        items.append(
+            "<div style=\"display:flex;align-items:center;gap:8px;"
+            "padding:2px 0;font-size:14px;\">"
+            "<span style=\"width:12px;height:12px;border-radius:50%;"
+            "flex:none;background:" + r["Farba"] + ";\"></span>"
+            "<span style=\"flex:1;\">" + str(r[label_col]) + "</span>"
+            "<span style=\"font-weight:600;\">" + r["Podiel (%)"]
+            + "</span></div>")
+    return "<div style=\"max-width:330px;\">" + "".join(items) + "</div>"
+
+
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown("#### Rozdelenie portfolia")
+
+if not st.session_state.holdings:
+    st.info("Pridaj akcie vyssie, aby sa tu zobrazilo rozdelenie portfolia.")
+else:
+    _btn_sec = st.session_state.pop("_sector_btn", False)
+    with st.spinner("Doplnam sektory..."):
+        update_sector_store(
+            st.session_state.holdings, stock_records,
+            SECTOR_MANUAL_PER_RUN if _btn_sec else SECTOR_AUTO_PER_RUN)
+    _sstore = _sector_store_get()
+
+    _pf_rows = []
+    _pf_missing = []
+    for _tkr, _qty in st.session_state.holdings.items():
+        _rec = stock_records.get(_tkr)
+        if _rec is None or not _rec.get("price"):
+            _pf_missing.append(_tkr)
+            continue
+        _fx = fx_rate_cached(_rec["currency"])
+        if _fx is None:
+            _pf_missing.append(_tkr)
+            continue
+        try:
+            _val = float(_qty) * float(_rec["price"]) * float(_fx)
+        except Exception:
+            _pf_missing.append(_tkr)
+            continue
+        if _val <= 0:
+            continue
+        _sec_raw = (_sstore.get(_tkr, {}).get("sector")
+                    or _rec.get("sector") or "")
+        _pf_rows.append({
+            "Ticker": _tkr,
+            "Stat": _rec.get("country") or "Nezname",
+            "Sektor": SECTOR_SK.get(_sec_raw, _sec_raw) or "Nezname",
+            "Hodnota (USD)": _val,
+        })
+
+    if not _pf_rows:
+        st.info("Zatial nie su dostupne ceny akcii na vypocet rozdelenia.")
+    else:
+        _df_pf = pd.DataFrame(_pf_rows)
+        _total = float(_df_pf["Hodnota (USD)"].sum())
+        st.caption(
+            "Podiel je podla hodnoty pozicie = pocet akcii x aktualna cena "
+            "(prepocitane na USD), preto je len priblizny. Celkova hodnota: "
+            + fmt_curr(_total, "USD", 0) + " (" + str(len(_df_pf))
+            + " akcii)."
+            + ((" Bez ceny/kurzu: " + ", ".join(_pf_missing[:10])
+                + (" ..." if len(_pf_missing) > 10 else "") + ".")
+               if _pf_missing else ""))
+        _n_unknown = int((_df_pf["Sektor"] == "Nezname").sum())
+        if _n_unknown:
+            _c1, _c2 = st.columns([4, 1])
+            _c1.caption(
+                "Sektor zatial nepoznam pri " + str(_n_unknown)
+                + " akciach - doplnaju sa postupne z Yahoo (po "
+                + str(SECTOR_AUTO_PER_RUN) + " pri kazdom nacitani "
+                "stranky) a ukladaju sa, takze sa nestahuju znova.")
+            if _c2.button("Doplnit sektory teraz", key="sector_fill_btn"):
+                st.session_state["_sector_btn"] = True
+                st.rerun()
+
+        _by_country = (_df_pf.groupby("Stat")["Hodnota (USD)"].sum()
+                       .reset_index())
+        _by_sector = (_df_pf.groupby("Sektor")["Hodnota (USD)"].sum()
+                      .reset_index())
+        _top = _df_pf.sort_values("Hodnota (USD)", ascending=False)
+        _TOPN = 15
+        _by_stock = _top.head(_TOPN)[["Ticker", "Hodnota (USD)"]].copy()
+        if len(_top) > _TOPN:
+            _rest = _top.iloc[_TOPN:]
+            _by_stock = pd.concat([_by_stock, pd.DataFrame([{
+                "Ticker": "Ostatne (" + str(len(_rest)) + " akcii)",
+                "Hodnota (USD)": float(_rest["Hodnota (USD)"].sum())}])],
+                ignore_index=True)
+
+        _g1, _g2, _g3 = st.columns(3)
+        with _g1:
+            st.markdown("**Podla statu**")
+            st.altair_chart(make_pie_chart(_by_country, "Stat"),
+                            use_container_width=False)
+            st.markdown(pie_legend_html(_by_country, "Stat"),
+                        unsafe_allow_html=True)
+        with _g2:
+            st.markdown("**Podla sektora**")
+            st.altair_chart(make_pie_chart(_by_sector, "Sektor"),
+                            use_container_width=False)
+            st.markdown(pie_legend_html(_by_sector, "Sektor"),
+                        unsafe_allow_html=True)
+        with _g3:
+            st.markdown("**Podla akcie (najvacsie pozicie)**")
+            st.altair_chart(make_pie_chart(_by_stock, "Ticker"),
+                            use_container_width=False)
+            st.markdown(pie_legend_html(_by_stock, "Ticker"),
+                        unsafe_allow_html=True)
