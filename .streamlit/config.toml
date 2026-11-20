@@ -1,3 +1,4 @@
 [theme]
 secondaryBackgroundColor = "#d4deee"
 dataframeHeaderBackgroundColor = "#f7f7f8"
+dataframeHeaderTextColor = "#31333f"
