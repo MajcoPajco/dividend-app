@@ -2613,9 +2613,10 @@ st.markdown(
     "border:1px solid #e3e6ea;overflow:hidden;}"
     ".board{width:100%;border-collapse:collapse;border-spacing:0;"
     "font-family:'Courier New',Consolas,monospace;}"
-    ".board th{text-align:left;padding:8px 16px;font-size:11.5px;"
-    "letter-spacing:.1em;color:#8a93a1;text-transform:uppercase;"
-    "border-bottom:1px solid #e3e6ea;background:#fafbfc;}"
+    ".board th{text-align:left;padding:8px 16px;font-size:13px;"
+    "font-weight:600;letter-spacing:0;color:#31333f;text-transform:none;"
+    "font-family:Inter,Roboto,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;"
+    "border-bottom:1px solid #e3e6ea;background:#f7f7f8;}"
     ".board td{padding:6px 16px;font-size:15px;letter-spacing:.02em;"
     "white-space:nowrap;line-height:1.1;border-bottom:1px solid #f0f1f3;}"
     ".board tr:last-child td{border-bottom:none;}"
@@ -2875,6 +2876,15 @@ def _run_fetch_pass(max_attempts, spinner_text=None, max_fallback_attempts=None)
     return _records, summary
 
 
+
+def _theme_opt(name):
+    """Hodnota nastavenia temy z config.toml (None = nie je nastavene)."""
+    try:
+        return st.get_option(name)
+    except Exception:
+        return "?"
+
+
 def _data_freshness_caption():
     """
     Vrati kratky text ('Data k: 40 dnes 14:32, 20 vcera (08.09.), 108
@@ -2915,7 +2925,10 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return "Data k: " + ", ".join(_parts) + "  |  kod v30  |  streamlit " + str(getattr(st, "__version__", "?"))
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v32  |  streamlit "
+            + str(getattr(st, "__version__", "?"))
+            + "  |  tema sec="
+            + str(_theme_opt("theme.secondaryBackgroundColor")))
 
 
 SHEET_BACKUP_MIN_INTERVAL = timedelta(minutes=30)
