@@ -2947,7 +2947,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return ("Data k: " + ", ".join(_parts) + "  |  kod v34  |  streamlit "
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v35  |  streamlit "
             + str(getattr(st, "__version__", "?"))
             + "  |  tema sec="
             + str(_theme_opt("theme.secondaryBackgroundColor")))
@@ -4750,7 +4750,7 @@ def _pie_prepare(df, label_col):
     return d
 
 
-def make_pie_chart(df, label_col, size=290):
+def make_pie_chart(df, label_col, size=420):
     """Farebny kolacovy (donut) graf: df ma stlpce label_col a 'Hodnota
     (USD)'. Vacsie vyseky maju percento priamo v grafe; legenda je
     samostatne (pie_legend_html)."""
@@ -4772,7 +4772,7 @@ def make_pie_chart(df, label_col, size=290):
         ],
     )
     labels = alt.Chart(d).mark_text(
-        radius=int(_ro * 0.72), size=12, fontWeight="bold", color="#ffffff",
+        radius=int(_ro * 0.74), size=16, fontWeight="bold", color="#ffffff",
     ).encode(theta=theta, order=order, text="Popis:N")
     return (arcs + labels).properties(width=size, height=size)
 
@@ -4783,13 +4783,13 @@ def pie_legend_html(df, label_col):
     for _, r in d.iterrows():
         items.append(
             "<div style=\"display:flex;align-items:center;gap:8px;"
-            "padding:2px 0;font-size:14px;\">"
-            "<span style=\"width:12px;height:12px;border-radius:50%;"
+            "padding:4px 0;font-size:18px;\">"
+            "<span style=\"width:16px;height:16px;border-radius:50%;"
             "flex:none;background:" + r["Farba"] + ";\"></span>"
             "<span style=\"flex:1;\">" + str(r[label_col]) + "</span>"
             "<span style=\"font-weight:600;\">" + r["Podiel (%)"]
             + "</span></div>")
-    return "<div style=\"max-width:330px;\">" + "".join(items) + "</div>"
+    return "<div style=\"max-width:440px;\">" + "".join(items) + "</div>"
 
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -4873,19 +4873,19 @@ else:
 
         _g1, _g2, _g3 = st.columns(3)
         with _g1:
-            st.markdown("**Podla statu**")
+            st.markdown("##### Podla statu")
             st.altair_chart(make_pie_chart(_by_country, "Stat"),
                             use_container_width=False)
             st.markdown(pie_legend_html(_by_country, "Stat"),
                         unsafe_allow_html=True)
         with _g2:
-            st.markdown("**Podla sektora**")
+            st.markdown("##### Podla sektora")
             st.altair_chart(make_pie_chart(_by_sector, "Sektor"),
                             use_container_width=False)
             st.markdown(pie_legend_html(_by_sector, "Sektor"),
                         unsafe_allow_html=True)
         with _g3:
-            st.markdown("**Podla akcie (najvacsie pozicie)**")
+            st.markdown("##### Podla akcie (najvacsie pozicie)")
             st.altair_chart(make_pie_chart(_by_stock, "Ticker"),
                             use_container_width=False)
             st.markdown(pie_legend_html(_by_stock, "Ticker"),
