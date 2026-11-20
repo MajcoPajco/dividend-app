@@ -2607,6 +2607,25 @@ st.markdown("### Dividend tracker")
 
 now_utc = datetime.now(ZoneInfo("UTC"))
 
+
+def _bold(label):
+    """Tucny popis stlpca v canvas tabulkach (st.data_editor/st.dataframe):
+    ich hlavicku nejde ostylovat cez CSS, preto pouzijeme tucne Unicode
+    znaky (Mathematical Sans-Serif Bold). Interne nazvy stlpcov ostavaju."""
+    out = []
+    for ch in str(label):
+        o = ord(ch)
+        if 65 <= o <= 90:
+            out.append(chr(0x1D5D4 + o - 65))
+        elif 97 <= o <= 122:
+            out.append(chr(0x1D5EE + o - 97))
+        elif 48 <= o <= 57:
+            out.append(chr(0x1D7EC + o - 48))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 st.markdown(
     "<style>"
     ".board-wrap{background:#fff;border-radius:10px;padding:0;"
@@ -2614,7 +2633,7 @@ st.markdown(
     ".board{width:100%;border-collapse:collapse;border-spacing:0;"
     "font-family:'Courier New',Consolas,monospace;}"
     ".board th{text-align:left;padding:8px 16px;font-size:13px;"
-    "font-weight:600;letter-spacing:0;color:#31333f;text-transform:none;"
+    "font-weight:700;letter-spacing:0;color:#31333f;text-transform:none;"
     "font-family:Inter,Roboto,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;"
     "border-bottom:1px solid #e3e6ea;background:#f7f7f8;}"
     ".board td{padding:6px 16px;font-size:15px;letter-spacing:.02em;"
@@ -2925,7 +2944,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return ("Data k: " + ", ".join(_parts) + "  |  kod v32  |  streamlit "
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v33  |  streamlit "
             + str(getattr(st, "__version__", "?"))
             + "  |  tema sec="
             + str(_theme_opt("theme.secondaryBackgroundColor")))
@@ -3589,7 +3608,9 @@ else:
         edited_h = st.data_editor(
             styled_h,
             column_config={
+                **{_c: _bold(_c) for _c in df_h.columns if _c != "Mnozstvo"},
                 "Mnozstvo": st.column_config.TextColumn(
+                    _bold("Mnozstvo"),
                     help="Prepis mnozstvo (aj s desatinnou ciarkou). "
                          "Ulozi sa hned do Google Sheets. 0 = odstranit akciu."),
             },
@@ -3921,12 +3942,14 @@ else:
         _pay_ed = st.data_editor(
             _styled_pay,
             column_config={
+                **{_c: _bold(_c) for _c in _df_pay.columns
+                   if _c not in ("Div Date", "Dividenda/akcia")},
                 "Div Date": st.column_config.TextColumn(
-                    "Div Date",
+                    _bold("Div Date"),
                     help="Datum vyplaty - dvojklik a prepis (napr. 15/11/26). "
                          "Ulozi sa hned do Google Sheets."),
                 "Dividenda/akcia": st.column_config.TextColumn(
-                    "Dividenda/akcia",
+                    _bold("Dividenda/akcia"),
                     help="Suma na 1 akciu - dvojklik a prepis (napr. 0,8181). "
                          "Ulozi sa hned do Google Sheets."),
             },
@@ -4173,7 +4196,11 @@ else:
         _yearly.columns = ["Prijate (USD)", "Pocet vyplat"]
         st.markdown("**Porovnanie rokov**")
         st.dataframe(_yearly.style.format({"Prijate (USD)": "{:.2f}"}),
-                     use_container_width=True)
+                     use_container_width=True,
+                     column_config={
+                         "_index": _bold("Rok"),
+                         "Prijate (USD)": _bold("Prijate (USD)"),
+                         "Pocet vyplat": _bold("Pocet vyplat")})
 
     with st.expander("Zaznamy - upravit, pridat historicke, zmazat",
                      expanded=False):
@@ -4199,12 +4226,15 @@ else:
             _edit_src, num_rows="dynamic", use_container_width=True,
             key="payout_editor",
             column_config={
+                "Ticker": _bold("Ticker"),
+                "Mena": _bold("Mena"),
+                "Zdroj": _bold("Zdroj"),
                 "Datum vyplaty": st.column_config.DateColumn(
-                    "Datum vyplaty", format="DD/MM/YYYY"),
+                    _bold("Datum vyplaty"), format="DD/MM/YYYY"),
                 "Pocet akcii": st.column_config.NumberColumn(
-                    "Pocet akcii", format="%.5f"),
+                    _bold("Pocet akcii"), format="%.5f"),
                 "Suma na akciu": st.column_config.NumberColumn(
-                    "Suma na akciu", format="%.4f"),
+                    _bold("Suma na akciu"), format="%.4f"),
             },
         )
         if st.button("Ulozit zmeny do Google Sheets", key="payout_save"):
@@ -4348,6 +4378,10 @@ else:
             st.dataframe(
                 pivot_hist.style.format("{:.2f}"),
                 use_container_width=True,
+                column_config={
+                    "_index": _bold("Mesiac"),
+                    **{_c: _bold(_c) for _c in pivot_hist.columns},
+                },
             )
 
 # ============================================================
