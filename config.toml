@@ -1,7 +1,0 @@
-# Umiestni do priecinka .streamlit/ vedla app.py (cesta: .streamlit/config.toml)
-# a restartuj appku. Zmeni farbu zvyraznenia riadka pri prechode mysou v
-# editovatelnych tabulkach (Moje akcie, Vyplacane dividendy) na #f2f5fa,
-# rovnaky odtien ako v tabulke Najblizsie Ex-Div datumy.
-[theme]
-secondaryBackgroundColor = "#d4deee"
-dataframeHeaderBackgroundColor = "#f7f7f8"
