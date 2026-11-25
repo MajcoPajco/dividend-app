@@ -2947,7 +2947,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return ("Data k: " + ", ".join(_parts) + "  |  kod v36  |  streamlit "
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v38  |  streamlit "
             + str(getattr(st, "__version__", "?"))
             + "  |  tema sec="
             + str(_theme_opt("theme.secondaryBackgroundColor")))
@@ -4750,7 +4750,8 @@ def _pie_prepare(df, label_col):
     return d
 
 
-def make_pie_chart(df, label_col, size=420, select_name=None):
+def make_pie_chart(df, label_col, size=420, select_name=None,
+                   highlight=None):
     """Farebny kolacovy (donut) graf: df ma stlpce label_col a 'Hodnota
     (USD)'. Vacsie vyseky maju percento priamo v grafe; legenda je
     samostatne (pie_legend_html)."""
@@ -4773,8 +4774,23 @@ def make_pie_chart(df, label_col, size=420, select_name=None):
     )
     if select_name:
         _sel = alt.selection_point(name=select_name, fields=[label_col])
-        arcs = arcs.add_params(_sel).encode(
-            opacity=alt.condition(_sel, alt.value(1), alt.value(0.4)))
+        d["Zvyraznenie"] = [
+            1.0 if (not highlight or str(l) == str(highlight)) else 0.4
+            for l in d[label_col]]
+        arcs = alt.Chart(d).mark_arc(
+            innerRadius=int(_ro * 0.42), outerRadius=_ro,
+            stroke="#ffffff", strokeWidth=1.5, cursor="pointer",
+        ).encode(
+            theta=theta, order=order,
+            color=alt.Color("Farba:N", scale=None, legend=None),
+            opacity=alt.Opacity("Zvyraznenie:Q", scale=None, legend=None),
+            tooltip=[
+                alt.Tooltip(label_col + ":N", title=label_col),
+                alt.Tooltip("Hodnota (USD):Q", title="Hodnota (USD)",
+                            format="$,.0f"),
+                alt.Tooltip("Podiel (%):N", title="Podiel"),
+            ],
+        ).add_params(_sel)
     labels = alt.Chart(d).mark_text(
         radius=int(_ro * 0.74), size=16, fontWeight="bold", color="#ffffff",
     ).encode(theta=theta, order=order, text="Popis:N")
@@ -4885,46 +4901,48 @@ else:
                         unsafe_allow_html=True)
         with _g2:
             st.markdown("##### Podla sektora")
+            _sek_n = st.session_state.get("_sek_n", 0)
+            _active = st.session_state.get("_sek_active")
             _ev = st.altair_chart(
-                make_pie_chart(_by_sector, "Sektor", select_name="sel_sek"),
-                use_container_width=False, key="pie_sektor",
+                make_pie_chart(_by_sector, "Sektor", select_name="sel_sek",
+                               highlight=_active),
+                use_container_width=False, key="pie_sektor_" + str(_sek_n),
                 on_select="rerun", selection_mode=["sel_sek"])
-            _picked = None
+            _clicked = None
             try:
                 _pts = (_ev.selection or {}).get("sel_sek") or []
                 if _pts:
-                    _picked = _pts[0].get("Sektor")
+                    _clicked = _pts[0].get("Sektor")
             except Exception:
-                _picked = None
-            if _picked:
-                _sub = _df_pf[_df_pf["Sektor"] == _picked].sort_values(
+                _clicked = None
+            if _clicked:
+                # klik na uz otvoreny sektor ho zavrie, inak sa otvori novy;
+                # novy kluc grafu vymaze jeho vnutorny vyber
+                st.session_state["_sek_active"] = (
+                    None if _clicked == _active else _clicked)
+                st.session_state["_sek_n"] = _sek_n + 1
+                st.rerun()
+            if _active and _active in set(_df_pf["Sektor"]):
+                from html import escape as _esc
+                _sub = _df_pf[_df_pf["Sektor"] == _active].sort_values(
                     "Hodnota (USD)", ascending=False)
-                _sub_tot = float(_sub["Hodnota (USD)"].sum())
                 with st.container(border=True):
+                    _hc1, _hc2 = st.columns([8, 1])
+                    _hc1.markdown(
+                        "**" + str(_active) + "** (" + str(len(_sub))
+                        + " akcii)")
+                    if _hc2.button("✕", key="sek_close", help="Zavriet"):
+                        st.session_state["_sek_active"] = None
+                        st.rerun()
+                    _items = "".join(
+                        "<div style=\"padding:1px 0;font-size:15px;"
+                        "break-inside:avoid;\"><b>" + _esc(str(r["Ticker"]))
+                        + "</b> <span style=\"color:#5b6472;\">"
+                        + _esc(str(r["Meno"])) + "</span></div>"
+                        for _, r in _sub.iterrows())
                     st.markdown(
-                        "**" + str(_picked) + "** - " + str(len(_sub))
-                        + " akcii, " + fmt_curr(_sub_tot, "USD", 0)
-                        + " (" + fmt_num(_sub_tot / _total * 100, 1)
-                        + " % portfolia)")
-                    _tbl = pd.DataFrame({
-                        "Ticker": _sub["Ticker"].values,
-                        "Meno": _sub["Meno"].values,
-                        "Hodnota (USD)": _sub["Hodnota (USD)"].round(0)
-                        .astype(int).values,
-                        "Podiel v sektore": [
-                            fmt_num(v / _sub_tot * 100, 1) + " %"
-                            for v in _sub["Hodnota (USD)"]],
-                    })
-                    st.dataframe(
-                        _tbl, hide_index=True, use_container_width=True,
-                        height=min(420, 38 + 35 * len(_tbl)),
-                        column_config={
-                            "Ticker": _bold("Ticker"),
-                            "Meno": _bold("Meno"),
-                            "Hodnota (USD)": st.column_config.NumberColumn(
-                                _bold("Hodnota (USD)"), format="%d"),
-                            "Podiel v sektore": _bold("Podiel v sektore"),
-                        })
+                        "<div style=\"column-count:2;column-gap:20px;\">"
+                        + _items + "</div>", unsafe_allow_html=True)
             else:
                 st.caption("Klikni na farbu v grafe a zobrazia sa akcie "
                            "z daneho sektora.")
