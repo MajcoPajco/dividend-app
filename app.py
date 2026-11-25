@@ -2947,7 +2947,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return ("Data k: " + ", ".join(_parts) + "  |  kod v39  |  streamlit "
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v40  |  streamlit "
             + str(getattr(st, "__version__", "?"))
             + "  |  tema sec="
             + str(_theme_opt("theme.secondaryBackgroundColor")))
@@ -4807,7 +4807,7 @@ PIE_DETAILS_CSS = (
     ".pl-chev{display:inline-block;width:14px;color:#6b7380;font-size:18px;line-height:1;"
     "transition:transform .15s;}"
     ".pl-det[open] .pl-chev{transform:rotate(90deg);}"
-    ".pl-det .pl-body{column-count:2;column-gap:20px;padding:2px 0 8px 28px;}"
+    ".pl-det .pl-body{padding:2px 0 10px 28px;}"
     "</style>"
 )
 
@@ -4834,16 +4834,20 @@ def pie_legend_html(df, label_col, members=None):
             continue
         mem = members.get(r[label_col], [])
         body = "".join(
-            "<div style=\"padding:1px 0;font-size:15px;"
-            "break-inside:avoid;\"><b>" + _esc(str(t)) + "</b> "
-            "<span style=\"color:#5b6472;\">" + _esc(str(n))
+            "<div style=\"display:grid;grid-template-columns:96px 1fr;"
+            "gap:8px;padding:2px 0;font-size:15px;\"><b>"
+            + _esc(str(t)) + "</b><span title=\"" + _esc(str(n))
+            + "\" style=\"color:#5b6472;white-space:nowrap;"
+            "overflow:hidden;text-overflow:ellipsis;\">" + _esc(str(n))
             + "</span></div>" for t, n in mem)
         items.append(
             "<details class=\"pl-det\"><summary style=\"display:flex;"
             "align-items:center;gap:8px;font-size:18px;\">"
             + row + "<span class=\"pl-chev\">&#9656;</span></summary>"
             "<div class=\"pl-body\">" + body + "</div></details>")
-    return (("<div style=\"max-width:440px;\">" + "".join(items)
+    return (("<div style=\"max-width:"
+             + ("560" if members is not None else "440") + "px;\">"
+             + "".join(items)
              + "</div>")
             + (PIE_DETAILS_CSS if members is not None else ""))
 
