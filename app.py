@@ -2947,7 +2947,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return ("Data k: " + ", ".join(_parts) + "  |  kod v38  |  streamlit "
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v39  |  streamlit "
             + str(getattr(st, "__version__", "?"))
             + "  |  tema sec="
             + str(_theme_opt("theme.secondaryBackgroundColor")))
@@ -4797,19 +4797,55 @@ def make_pie_chart(df, label_col, size=420, select_name=None,
     return (arcs + labels).properties(width=size, height=size)
 
 
-def pie_legend_html(df, label_col):
+PIE_DETAILS_CSS = (
+    "<style>"
+    ".pl-det{margin:0;}"
+    ".pl-det summary{list-style:none;cursor:pointer;border-radius:6px;"
+    "padding:4px 6px;margin:0 -6px;}"
+    ".pl-det summary::-webkit-details-marker{display:none;}"
+    ".pl-det summary:hover{background:#f2f5fa;}"
+    ".pl-chev{display:inline-block;width:14px;color:#6b7380;font-size:18px;line-height:1;"
+    "transition:transform .15s;}"
+    ".pl-det[open] .pl-chev{transform:rotate(90deg);}"
+    ".pl-det .pl-body{column-count:2;column-gap:20px;padding:2px 0 8px 28px;}"
+    "</style>"
+)
+
+
+def pie_legend_html(df, label_col, members=None):
+    """Legenda k donut grafu. Ak je zadane members ({popis: [(ticker,
+    meno), ...]}), kazdy riadok sa po kliku rozbali (a dalsim klikom
+    zbali) a ukaze zoznam akcii."""
+    from html import escape as _esc
     d = _pie_prepare(df, label_col)
     items = []
     for _, r in d.iterrows():
-        items.append(
-            "<div style=\"display:flex;align-items:center;gap:8px;"
-            "padding:4px 0;font-size:18px;\">"
+        row = (
             "<span style=\"width:16px;height:16px;border-radius:50%;"
             "flex:none;background:" + r["Farba"] + ";\"></span>"
-            "<span style=\"flex:1;\">" + str(r[label_col]) + "</span>"
+            "<span style=\"flex:1;\">" + _esc(str(r[label_col]))
+            + "</span>"
             "<span style=\"font-weight:600;\">" + r["Podiel (%)"]
-            + "</span></div>")
-    return "<div style=\"max-width:440px;\">" + "".join(items) + "</div>"
+            + "</span>")
+        if members is None:
+            items.append(
+                "<div style=\"display:flex;align-items:center;gap:8px;"
+                "padding:4px 0;font-size:18px;\">" + row + "</div>")
+            continue
+        mem = members.get(r[label_col], [])
+        body = "".join(
+            "<div style=\"padding:1px 0;font-size:15px;"
+            "break-inside:avoid;\"><b>" + _esc(str(t)) + "</b> "
+            "<span style=\"color:#5b6472;\">" + _esc(str(n))
+            + "</span></div>" for t, n in mem)
+        items.append(
+            "<details class=\"pl-det\"><summary style=\"display:flex;"
+            "align-items:center;gap:8px;font-size:18px;\">"
+            + row + "<span class=\"pl-chev\">&#9656;</span></summary>"
+            "<div class=\"pl-body\">" + body + "</div></details>")
+    return (("<div style=\"max-width:440px;\">" + "".join(items)
+             + "</div>")
+            + (PIE_DETAILS_CSS if members is not None else ""))
 
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -4901,52 +4937,15 @@ else:
                         unsafe_allow_html=True)
         with _g2:
             st.markdown("##### Podla sektora")
-            _sek_n = st.session_state.get("_sek_n", 0)
-            _active = st.session_state.get("_sek_active")
-            _ev = st.altair_chart(
-                make_pie_chart(_by_sector, "Sektor", select_name="sel_sek",
-                               highlight=_active),
-                use_container_width=False, key="pie_sektor_" + str(_sek_n),
-                on_select="rerun", selection_mode=["sel_sek"])
-            _clicked = None
-            try:
-                _pts = (_ev.selection or {}).get("sel_sek") or []
-                if _pts:
-                    _clicked = _pts[0].get("Sektor")
-            except Exception:
-                _clicked = None
-            if _clicked:
-                # klik na uz otvoreny sektor ho zavrie, inak sa otvori novy;
-                # novy kluc grafu vymaze jeho vnutorny vyber
-                st.session_state["_sek_active"] = (
-                    None if _clicked == _active else _clicked)
-                st.session_state["_sek_n"] = _sek_n + 1
-                st.rerun()
-            if _active and _active in set(_df_pf["Sektor"]):
-                from html import escape as _esc
-                _sub = _df_pf[_df_pf["Sektor"] == _active].sort_values(
-                    "Hodnota (USD)", ascending=False)
-                with st.container(border=True):
-                    _hc1, _hc2 = st.columns([8, 1])
-                    _hc1.markdown(
-                        "**" + str(_active) + "** (" + str(len(_sub))
-                        + " akcii)")
-                    if _hc2.button("✕", key="sek_close", help="Zavriet"):
-                        st.session_state["_sek_active"] = None
-                        st.rerun()
-                    _items = "".join(
-                        "<div style=\"padding:1px 0;font-size:15px;"
-                        "break-inside:avoid;\"><b>" + _esc(str(r["Ticker"]))
-                        + "</b> <span style=\"color:#5b6472;\">"
-                        + _esc(str(r["Meno"])) + "</span></div>"
-                        for _, r in _sub.iterrows())
-                    st.markdown(
-                        "<div style=\"column-count:2;column-gap:20px;\">"
-                        + _items + "</div>", unsafe_allow_html=True)
-            else:
-                st.caption("Klikni na farbu v grafe a zobrazia sa akcie "
-                           "z daneho sektora.")
-            st.markdown(pie_legend_html(_by_sector, "Sektor"),
+            st.altair_chart(make_pie_chart(_by_sector, "Sektor"),
+                            use_container_width=False)
+            st.caption("Klikni na nazov sektora a zobrazia sa akcie v nom.")
+            _members = {
+                _sk: list(zip(_g["Ticker"], _g["Meno"]))
+                for _sk, _g in _df_pf.sort_values(
+                    "Hodnota (USD)", ascending=False).groupby("Sektor")}
+            st.markdown(pie_legend_html(_by_sector, "Sektor",
+                                        members=_members),
                         unsafe_allow_html=True)
         with _g3:
             st.markdown("##### Podla akcie (najvacsie pozicie)")
