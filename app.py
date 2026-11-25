@@ -2947,7 +2947,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return ("Data k: " + ", ".join(_parts) + "  |  kod v40  |  streamlit "
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v41  |  streamlit "
             + str(getattr(st, "__version__", "?"))
             + "  |  tema sec="
             + str(_theme_opt("theme.secondaryBackgroundColor")))
@@ -4807,7 +4807,7 @@ PIE_DETAILS_CSS = (
     ".pl-chev{display:inline-block;width:14px;color:#6b7380;font-size:18px;line-height:1;"
     "transition:transform .15s;}"
     ".pl-det[open] .pl-chev{transform:rotate(90deg);}"
-    ".pl-det .pl-body{padding:2px 0 10px 28px;}"
+    ".pl-det .pl-body{padding:2px 0 10px 28px;max-height:420px;overflow-y:auto;}"
     "</style>"
 )
 
@@ -4937,7 +4937,13 @@ else:
             st.markdown("##### Podla statu")
             st.altair_chart(make_pie_chart(_by_country, "Stat"),
                             use_container_width=False)
-            st.markdown(pie_legend_html(_by_country, "Stat"),
+            st.caption("Klikni na nazov statu a zobrazia sa akcie v nom.")
+            _members_c = {
+                _ck: list(zip(_g["Ticker"], _g["Meno"]))
+                for _ck, _g in _df_pf.sort_values(
+                    "Hodnota (USD)", ascending=False).groupby("Stat")}
+            st.markdown(pie_legend_html(_by_country, "Stat",
+                                        members=_members_c),
                         unsafe_allow_html=True)
         with _g2:
             st.markdown("##### Podla sektora")
