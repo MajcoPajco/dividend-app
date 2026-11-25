@@ -2947,7 +2947,7 @@ def _data_freshness_caption():
         _parts.append(str(_n_missing) + " zatial bez dat")
     if not _parts:
         return None
-    return ("Data k: " + ", ".join(_parts) + "  |  kod v35  |  streamlit "
+    return ("Data k: " + ", ".join(_parts) + "  |  kod v36  |  streamlit "
             + str(getattr(st, "__version__", "?"))
             + "  |  tema sec="
             + str(_theme_opt("theme.secondaryBackgroundColor")))
@@ -4750,7 +4750,7 @@ def _pie_prepare(df, label_col):
     return d
 
 
-def make_pie_chart(df, label_col, size=420):
+def make_pie_chart(df, label_col, size=420, select_name=None):
     """Farebny kolacovy (donut) graf: df ma stlpce label_col a 'Hodnota
     (USD)'. Vacsie vyseky maju percento priamo v grafe; legenda je
     samostatne (pie_legend_html)."""
@@ -4771,6 +4771,10 @@ def make_pie_chart(df, label_col, size=420):
             alt.Tooltip("Podiel (%):N", title="Podiel"),
         ],
     )
+    if select_name:
+        _sel = alt.selection_point(name=select_name, fields=[label_col])
+        arcs = arcs.add_params(_sel).encode(
+            opacity=alt.condition(_sel, alt.value(1), alt.value(0.4)))
     labels = alt.Chart(d).mark_text(
         radius=int(_ro * 0.74), size=16, fontWeight="bold", color="#ffffff",
     ).encode(theta=theta, order=order, text="Popis:N")
@@ -4827,6 +4831,7 @@ else:
                     or _rec.get("sector") or "")
         _pf_rows.append({
             "Ticker": _tkr,
+            "Meno": _rec.get("name") or _tkr,
             "Stat": _rec.get("country") or "Nezname",
             "Sektor": SECTOR_SK.get(_sec_raw, _sec_raw) or "Nezname",
             "Hodnota (USD)": _val,
@@ -4880,8 +4885,49 @@ else:
                         unsafe_allow_html=True)
         with _g2:
             st.markdown("##### Podla sektora")
-            st.altair_chart(make_pie_chart(_by_sector, "Sektor"),
-                            use_container_width=False)
+            _ev = st.altair_chart(
+                make_pie_chart(_by_sector, "Sektor", select_name="sel_sek"),
+                use_container_width=False, key="pie_sektor",
+                on_select="rerun", selection_mode=["sel_sek"])
+            _picked = None
+            try:
+                _pts = (_ev.selection or {}).get("sel_sek") or []
+                if _pts:
+                    _picked = _pts[0].get("Sektor")
+            except Exception:
+                _picked = None
+            if _picked:
+                _sub = _df_pf[_df_pf["Sektor"] == _picked].sort_values(
+                    "Hodnota (USD)", ascending=False)
+                _sub_tot = float(_sub["Hodnota (USD)"].sum())
+                with st.container(border=True):
+                    st.markdown(
+                        "**" + str(_picked) + "** - " + str(len(_sub))
+                        + " akcii, " + fmt_curr(_sub_tot, "USD", 0)
+                        + " (" + fmt_num(_sub_tot / _total * 100, 1)
+                        + " % portfolia)")
+                    _tbl = pd.DataFrame({
+                        "Ticker": _sub["Ticker"].values,
+                        "Meno": _sub["Meno"].values,
+                        "Hodnota (USD)": _sub["Hodnota (USD)"].round(0)
+                        .astype(int).values,
+                        "Podiel v sektore": [
+                            fmt_num(v / _sub_tot * 100, 1) + " %"
+                            for v in _sub["Hodnota (USD)"]],
+                    })
+                    st.dataframe(
+                        _tbl, hide_index=True, use_container_width=True,
+                        height=min(420, 38 + 35 * len(_tbl)),
+                        column_config={
+                            "Ticker": _bold("Ticker"),
+                            "Meno": _bold("Meno"),
+                            "Hodnota (USD)": st.column_config.NumberColumn(
+                                _bold("Hodnota (USD)"), format="%d"),
+                            "Podiel v sektore": _bold("Podiel v sektore"),
+                        })
+            else:
+                st.caption("Klikni na farbu v grafe a zobrazia sa akcie "
+                           "z daneho sektora.")
             st.markdown(pie_legend_html(_by_sector, "Sektor"),
                         unsafe_allow_html=True)
         with _g3:
